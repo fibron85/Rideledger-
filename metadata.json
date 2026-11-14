@@ -1,0 +1,6 @@
+{
+  "name": "RideLedger",
+  "description": "Local daily ride-sharing income, fuel, toll, commission, and net earnings tracker for drivers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
