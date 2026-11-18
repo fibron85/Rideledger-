@@ -3,6 +3,8 @@
     <string name="tagline_local_ledger">Offline Driver Income Ledger</string>
     <string name="nav_dashboard">Dashboard</string>
     <string name="nav_add_ride">New Ride</string>
+    <string name="nav_shift">Shift</string>
+    <string name="nav_finance">Finance</string>
     <string name="nav_reports">Reports</string>
     <string name="nav_settings">Settings</string>
 </resources>

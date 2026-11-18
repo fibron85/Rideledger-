@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -17,21 +20,31 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -41,16 +54,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,26 +79,54 @@ import com.example.data.local.entity.AppSettingsEntity
 import com.example.data.local.entity.DriverAccountEntity
 import com.example.data.local.entity.PickupPointEntity
 import com.example.data.local.entity.PlatformEntity
+import com.example.data.local.entity.RideEntity
+import com.example.domain.BillingCycle
 import com.example.domain.RideCalculator
+import com.example.ui.components.ExportDestinationDialog
+import com.example.ui.components.ImportFileBrowserDialog
+import com.example.ui.components.ImportPermissionDialog
+import com.example.ui.viewmodel.DailyReportGroup
+import com.example.ui.viewmodel.PeriodSummary
+import com.example.util.LocalStorageManager
+import com.example.util.ReportExporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     driver: DriverAccountEntity?,
     appSettings: AppSettingsEntity,
     platforms: List<PlatformEntity>,
     pickupPoints: List<PickupPointEntity>,
+    isBiometricAvailable: Boolean,
+    isBiometricEnabled: Boolean,
+    onToggleBiometric: (Boolean) -> Unit,
     onUpdateProfile: (fullName: String, mobileNumber: String) -> Unit,
     onChangePassword: (currentPin: String, newPin: String, confirmPin: String) -> Unit,
     onUpdateFuelAndCurrency: (fuelText: String, currencyCode: String) -> Unit,
+    onUpdateShiftTiming: (startHour: Int, startMinute: Int, endHour: Int, endMinute: Int) -> Unit,
     onAddPlatform: (String) -> Unit,
     onDeletePlatform: (PlatformEntity) -> Unit,
     onAddPickupPoint: (name: String, boltFeeText: String, dtcFeeText: String) -> Unit,
     onUpdatePickupPoint: (PickupPointEntity, newName: String, boltFeeText: String, dtcFeeText: String) -> Unit,
     onDeletePickupPoint: (PickupPointEntity) -> Unit,
+    settingsCycle: BillingCycle,
+    settingsCycleSummary: PeriodSummary,
+    settingsCycleGroups: List<DailyReportGroup>,
+    onShiftSettingsCycle: (Int) -> Unit,
+    onDeleteCycleData: (BillingCycle) -> Unit,
+    grantedFolderUri: String?,
+    onFolderPermissionGranted: (String) -> Unit,
+    onImportExcel: (Result<List<RideEntity>>) -> Unit,
+    onExportCompleted: (Result<Unit>, String) -> Unit,
+    onUiMessage: (String) -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var fullNameInput by remember(driver?.fullName) { mutableStateOf(driver?.fullName ?: "") }
     var mobileInput by remember(driver?.mobileNumber) { mutableStateOf(driver?.mobileNumber ?: "") }
 
@@ -90,6 +137,11 @@ fun SettingsScreen(
         mutableStateOf(appSettings.currencyCode)
     }
 
+    var shiftStartHour by remember(appSettings.shiftStartHour) { mutableIntStateOf(appSettings.shiftStartHour) }
+    var shiftStartMinute by remember(appSettings.shiftStartMinute) { mutableIntStateOf(appSettings.shiftStartMinute) }
+    var shiftEndHour by remember(appSettings.shiftEndHour) { mutableIntStateOf(appSettings.shiftEndHour) }
+    var shiftEndMinute by remember(appSettings.shiftEndMinute) { mutableIntStateOf(appSettings.shiftEndMinute) }
+
     LaunchedEffect(driver?.fullName, driver?.mobileNumber) {
         if (driver != null) {
             fullNameInput = driver.fullName
@@ -97,10 +149,169 @@ fun SettingsScreen(
         }
     }
 
+    var showStartTimePicker by remember { mutableStateOf(false) }
+    var showEndTimePicker by remember { mutableStateOf(false) }
     var showAddPlatformDialog by remember { mutableStateOf(false) }
     var showAddPickupDialog by remember { mutableStateOf(false) }
     var editingPickup by remember { mutableStateOf<PickupPointEntity?>(null) }
     var showChangePasswordDialog by remember { mutableStateOf(false) }
+    var showDeleteCycleWarning by remember { mutableStateOf(false) }
+    var pendingBackupFileName by remember { mutableStateOf<String?>(null) }
+    var showImportPermissionDialog by remember { mutableStateOf(false) }
+    var showImportBrowserDialog by remember { mutableStateOf(false) }
+    var browserStartInAppFolder by remember { mutableStateOf(false) }
+
+    fun buildBackupBytes(): ByteArray {
+        return ReportExporter.buildXlsxBytes(
+            driver = driver,
+            settings = appSettings,
+            periodLabel = settingsCycle.label,
+            summary = settingsCycleSummary,
+            dailyGroups = settingsCycleGroups
+        )
+    }
+
+    fun exportBackupToGrantedFolder(folderUri: String, fileName: String) {
+        scope.launch {
+            val res = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = buildBackupBytes()
+                    LocalStorageManager.writeBytesToTreeFolder(
+                        context = context,
+                        folderUriString = folderUri,
+                        fileName = fileName,
+                        mimeType = LocalStorageManager.MIME_XLSX,
+                        bytes = bytes
+                    ).getOrThrow()
+                }
+            }
+            res.fold(
+                onSuccess = { savedName ->
+                    val folderName = LocalStorageManager.getTreeFolderDisplayName(context, folderUri)
+                    onUiMessage("Backup $savedName saved in \"$folderName\".")
+                },
+                onFailure = { err ->
+                    onUiMessage(err.message ?: "Failed to save backup in destination folder.")
+                }
+            )
+        }
+    }
+
+    fun exportBackupToAppDataFolder(fileName: String) {
+        scope.launch {
+            val res = withContext(Dispatchers.IO) {
+                runCatching {
+                    LocalStorageManager.saveBytesToAppDataFolder(
+                        context = context,
+                        fileName = fileName,
+                        bytes = buildBackupBytes()
+                    ).getOrThrow()
+                }
+            }
+            res.fold(
+                onSuccess = { file ->
+                    onUiMessage("Backup ${file.name} saved inside App 'data' folder.")
+                },
+                onFailure = { err ->
+                    onUiMessage(err.message ?: "Failed to save backup in App 'data' folder.")
+                }
+            )
+        }
+    }
+
+    val grantFolderAccessLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            LocalStorageManager.persistTreePermission(context, treeUri).fold(
+                onSuccess = { uriString ->
+                    onFolderPermissionGranted(uriString)
+                    val folderName = LocalStorageManager.getTreeFolderDisplayName(context, uriString)
+                    onUiMessage("Folder read & write access granted: $folderName")
+                },
+                onFailure = { err ->
+                    onUiMessage(err.message ?: "Could not save folder permission.")
+                }
+            )
+        }
+    }
+
+    val exportFolderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        val targetFileName = pendingBackupFileName
+        pendingBackupFileName = null
+        if (treeUri != null) {
+            LocalStorageManager.persistTreePermission(context, treeUri).fold(
+                onSuccess = { uriString ->
+                    onFolderPermissionGranted(uriString)
+                    if (!targetFileName.isNullOrBlank()) {
+                        exportBackupToGrantedFolder(uriString, targetFileName)
+                    }
+                },
+                onFailure = { err ->
+                    onUiMessage(err.message ?: "Could not obtain destination folder access.")
+                }
+            )
+        }
+    }
+
+    val systemBackupSaveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("*/*")
+    ) { uri ->
+        pendingBackupFileName = null
+        if (uri != null) {
+            scope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    ReportExporter.exportToExcelXlsx(
+                        context = context,
+                        uri = uri,
+                        driver = driver,
+                        settings = appSettings,
+                        periodLabel = settingsCycle.label,
+                        summary = settingsCycleSummary,
+                        dailyGroups = settingsCycleGroups
+                    )
+                }
+                onExportCompleted(res, "Excel Backup")
+            }
+        }
+    }
+
+    val importFolderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            LocalStorageManager.persistTreePermission(context, treeUri).fold(
+                onSuccess = { uriString ->
+                    onFolderPermissionGranted(uriString)
+                    browserStartInAppFolder = false
+                    showImportBrowserDialog = true
+                },
+                onFailure = { err ->
+                    onUiMessage(err.message ?: "Could not access selected folder.")
+                }
+            )
+        }
+    }
+
+    val systemImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    ReportExporter.importFromExcelXlsx(
+                        context = context,
+                        uri = uri,
+                        driverId = driver?.driverId ?: "",
+                        settings = appSettings
+                    )
+                }
+                onImportExcel(res)
+            }
+        }
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -119,7 +330,7 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.headlineMedium
                 )
                 Text(
-                    text = "Manage driver profile, fuel rate, platforms, and pickup fees",
+                    text = "Manage driver profile, shift timing, fuel rate, platforms, and pickup fees",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -205,6 +416,54 @@ fun SettingsScreen(
                         }
                     }
 
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Fingerprint,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Fingerprint Login",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = if (isBiometricAvailable) {
+                                            "Sign in locally with your device fingerprint"
+                                        } else {
+                                            "No biometric sensor or fingerprint enrolled on device"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = isBiometricEnabled,
+                                onCheckedChange = onToggleBiometric,
+                                enabled = isBiometricAvailable,
+                                modifier = Modifier.testTag("settings_biometric_switch")
+                            )
+                        }
+                    }
+
                     OutlinedButton(
                         onClick = onLogout,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
@@ -220,7 +479,324 @@ fun SettingsScreen(
             }
         }
 
-        // 2. Universal Fuel Cost per km Hired Distance & Currency
+        // 2. Shift Timing (From & To)
+        item {
+            val isOvernight = (shiftStartHour * 60 + shiftStartMinute) > (shiftEndHour * 60 + shiftEndMinute)
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Shift Timing (From & To)", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = "Rides inside this window count as daily shift income; months calculate from day 21 to next month day 20",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { showStartTimePicker = true }
+                                .testTag("settings_shift_from_button")
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Text(
+                                    text = "SHIFT FROM",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = RideCalculator.toTimeLabel(shiftStartHour, shiftStartMinute),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { showEndTimePicker = true }
+                                .testTag("settings_shift_to_button")
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Text(
+                                    text = "SHIFT TO",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = RideCalculator.toTimeLabel(shiftEndHour, shiftEndMinute),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = if (isOvernight) {
+                            "Overnight shift (${RideCalculator.toTimeLabel(shiftStartHour, shiftStartMinute)} → ${RideCalculator.toTimeLabel(shiftEndHour, shiftEndMinute)} next day)"
+                        } else {
+                            "Same-day shift (${RideCalculator.toTimeLabel(shiftStartHour, shiftStartMinute)} → ${RideCalculator.toTimeLabel(shiftEndHour, shiftEndMinute)})"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Button(
+                        onClick = {
+                            onUpdateShiftTiming(
+                                shiftStartHour,
+                                shiftStartMinute,
+                                shiftEndHour,
+                                shiftEndMinute
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_save_shift_button")
+                    ) {
+                        Text("Save Shift Timing")
+                    }
+                }
+            }
+        }
+
+        // 3. Monthly Backup, Import & Delete (21st-20th Billing Cycle)
+        item {
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth()
+                    .testTag("settings_monthly_data_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Backup,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Monthly Backup, Import & Delete", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = "Back up or delete rides by monthly income cycle (day 21 to day 20), or restore from an Excel backup",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = { onShiftSettingsCycle(-1) },
+                                    modifier = Modifier.testTag("settings_prev_cycle")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                        contentDescription = "Previous monthly cycle"
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = settingsCycle.label,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "21st–20th Billing Month",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onShiftSettingsCycle(1) },
+                                    modifier = Modifier.testTag("settings_next_cycle")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                        contentDescription = "Next monthly cycle"
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider()
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "${settingsCycleSummary.rideCount} rides",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Gross ${RideCalculator.formatMoney(settingsCycleSummary.grossIncome, appSettings.currencyCode)} • Net ${RideCalculator.formatMoney(settingsCycleSummary.netIncome, appSettings.currencyCode)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+
+                    val hasValidFolder = remember(grantedFolderUri) {
+                        LocalStorageManager.hasValidTreePermission(context, grantedFolderUri)
+                    }
+                    val grantedFolderName = remember(grantedFolderUri, hasValidFolder) {
+                        if (hasValidFolder) LocalStorageManager.getTreeFolderDisplayName(context, grantedFolderUri)
+                        else "Not granted"
+                    }
+                    val appDataPath = remember { LocalStorageManager.getAppDataFolderDisplayPath(context) }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "App data folder: $appDataPath",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Shared folder access: $grantedFolderName",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (hasValidFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(
+                                onClick = {
+                                    runCatching { grantFolderAccessLauncher.launch(null) }
+                                        .onFailure {
+                                            onUiMessage("System folder picker unavailable; using App 'data' folder.")
+                                        }
+                                },
+                                modifier = Modifier.testTag("settings_folder_permission_button")
+                            ) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (hasValidFolder) "Change" else "Grant")
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                pendingBackupFileName = "RideLedger_Backup_${settingsCycle.startDateIso}_to_${settingsCycle.endDateIso}.xlsx"
+                            },
+                            enabled = settingsCycleGroups.isNotEmpty(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_backup_month_button")
+                        ) {
+                            Icon(Icons.Default.Backup, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Backup Excel")
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                if (LocalStorageManager.hasValidTreePermission(context, grantedFolderUri)) {
+                                    browserStartInAppFolder = false
+                                    showImportBrowserDialog = true
+                                } else {
+                                    showImportPermissionDialog = true
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_import_excel_button")
+                        ) {
+                            Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Import Excel")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showDeleteCycleWarning = true },
+                        enabled = settingsCycleSummary.rideCount > 0,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_delete_month_button")
+                    ) {
+                        Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Delete Month Data (${settingsCycle.label})")
+                    }
+                }
+            }
+        }
+
+        // 4. Universal Fuel Cost per km Hired Distance & Currency
         item {
             Card(
                 shape = MaterialTheme.shapes.large,
@@ -290,7 +866,7 @@ fun SettingsScreen(
             }
         }
 
-        // 3. Ride-Sharing Platforms
+        // 4. Ride-Sharing Platforms
         item {
             Card(
                 shape = MaterialTheme.shapes.large,
@@ -351,9 +927,12 @@ fun SettingsScreen(
                                         fontWeight = FontWeight.SemiBold
                                     )
                                     val hint = when {
-                                        RideCalculator.isBoltPlatform(platform.name) -> "Supports Booking Fee & Street Hail/OTP Commission"
-                                        RideCalculator.isDtcPlatform(platform.name) -> "Supports Booking Fee"
-                                        else -> "Standard platform"
+                                        RideCalculator.isBoltPlatform(platform.name) -> "Uses Pickup Point, Booking Fee & Street Hail/OTP Commission"
+                                        RideCalculator.isDtcPlatform(platform.name) -> "Uses Pickup Point & Booking Fee"
+                                        RideCalculator.isDtcEventBookingPlatform(platform.name) -> "Event platform (Account payment only; Full Fare = Net Income)"
+                                        RideCalculator.isUberPlatform(platform.name) -> "Direct platform (Uses 'Your Earning'; Salik & Pickup hidden)"
+                                        RideCalculator.isCareemPlatform(platform.name) -> "Direct platform (Uses 'Your Earning'; Pickup Point hidden)"
+                                        else -> "Direct platform (Pickup Point & Booking Fee hidden)"
                                     }
                                     Text(
                                         text = hint,
@@ -378,7 +957,7 @@ fun SettingsScreen(
             }
         }
 
-        // 4. Pickup Points & Default Bolt/DTC Booking Fees
+        // 5. Pickup Points & Default Bolt/DTC Booking Fees
         item {
             Card(
                 shape = MaterialTheme.shapes.large,
@@ -478,6 +1057,56 @@ fun SettingsScreen(
         }
     }
 
+    if (showStartTimePicker) {
+        val state = rememberTimePickerState(
+            initialHour = shiftStartHour,
+            initialMinute = shiftStartMinute,
+            is24Hour = true
+        )
+        AlertDialog(
+            onDismissRequest = { showStartTimePicker = false },
+            title = { Text("Shift From Time") },
+            text = { TimePicker(state = state) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        shiftStartHour = state.hour
+                        shiftStartMinute = state.minute
+                        showStartTimePicker = false
+                    }
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStartTimePicker = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showEndTimePicker) {
+        val state = rememberTimePickerState(
+            initialHour = shiftEndHour,
+            initialMinute = shiftEndMinute,
+            is24Hour = true
+        )
+        AlertDialog(
+            onDismissRequest = { showEndTimePicker = false },
+            title = { Text("Shift To Time") },
+            text = { TimePicker(state = state) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        shiftEndHour = state.hour
+                        shiftEndMinute = state.minute
+                        showEndTimePicker = false
+                    }
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndTimePicker = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showAddPlatformDialog) {
         AddPlatformDialog(
             onDismiss = { showAddPlatformDialog = false },
@@ -524,6 +1153,155 @@ fun SettingsScreen(
             onConfirm = { currentPin, newPin, confirmPin ->
                 onChangePassword(currentPin, newPin, confirmPin)
                 showChangePasswordDialog = false
+            }
+        )
+    }
+
+    if (showDeleteCycleWarning) {
+        AlertDialog(
+            onDismissRequest = { showDeleteCycleWarning = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Warning",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("Delete Month Data?") },
+            text = {
+                Text(
+                    "Warning: You are about to permanently delete all ${settingsCycleSummary.rideCount} rides " +
+                        "(Gross ${RideCalculator.formatMoney(settingsCycleSummary.grossIncome, appSettings.currencyCode)}, " +
+                        "Net ${RideCalculator.formatMoney(settingsCycleSummary.netIncome, appSettings.currencyCode)}) " +
+                        "for ${settingsCycle.label}.\n\nThis cannot be undone. Please export an Excel backup before deleting if you want to keep these records."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteCycleData(settingsCycle)
+                        showDeleteCycleWarning = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("settings_confirm_delete_month_button")
+                ) {
+                    Text("Delete Permanently")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteCycleWarning = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    pendingBackupFileName?.let { fileName ->
+        ExportDestinationDialog(
+            fileName = fileName,
+            formatLabel = "Excel Backup",
+            grantedFolderUri = grantedFolderUri,
+            onDismiss = { pendingBackupFileName = null },
+            onSaveToGrantedFolder = {
+                val uri = grantedFolderUri
+                pendingBackupFileName = null
+                if (!uri.isNullOrBlank()) {
+                    exportBackupToGrantedFolder(uri, fileName)
+                }
+            },
+            onChooseDestinationFolder = {
+                runCatching { exportFolderPickerLauncher.launch(null) }
+                    .onFailure {
+                        pendingBackupFileName = null
+                        onUiMessage("Folder picker unavailable; saving backup in App 'data' folder.")
+                        exportBackupToAppDataFolder(fileName)
+                    }
+            },
+            onSaveToAppDataFolder = {
+                pendingBackupFileName = null
+                exportBackupToAppDataFolder(fileName)
+            },
+            onUseSystemSavePicker = {
+                runCatching { systemBackupSaveLauncher.launch(fileName) }
+                    .onFailure {
+                        pendingBackupFileName = null
+                        onUiMessage("System file picker unavailable; saving backup in App 'data' folder.")
+                        exportBackupToAppDataFolder(fileName)
+                    }
+            }
+        )
+    }
+
+    if (showImportPermissionDialog) {
+        ImportPermissionDialog(
+            onDismiss = { showImportPermissionDialog = false },
+            onGrantFolderPermission = {
+                showImportPermissionDialog = false
+                runCatching { importFolderPickerLauncher.launch(null) }
+                    .onFailure {
+                        onUiMessage("System folder picker unavailable; opening App 'data' folder browser.")
+                        browserStartInAppFolder = true
+                        showImportBrowserDialog = true
+                    }
+            },
+            onBrowseAppDataFolder = {
+                showImportPermissionDialog = false
+                browserStartInAppFolder = true
+                showImportBrowserDialog = true
+            },
+            onOpenSystemPicker = {
+                showImportPermissionDialog = false
+                runCatching { systemImportLauncher.launch(arrayOf("*/*")) }
+                    .onFailure {
+                        onUiMessage("System file picker unavailable; opening App 'data' folder browser.")
+                        browserStartInAppFolder = true
+                        showImportBrowserDialog = true
+                    }
+            }
+        )
+    }
+
+    if (showImportBrowserDialog) {
+        ImportFileBrowserDialog(
+            grantedFolderUri = grantedFolderUri,
+            initialUseAppFolder = browserStartInAppFolder,
+            onDismiss = { showImportBrowserDialog = false },
+            onSelectEntry = { entry ->
+                showImportBrowserDialog = false
+                scope.launch {
+                    val res = withContext(Dispatchers.IO) {
+                        val driverId = driver?.driverId ?: ""
+                        when {
+                            entry.localFile != null -> ReportExporter.importFromExcelFile(
+                                file = entry.localFile,
+                                driverId = driverId,
+                                settings = appSettings
+                            )
+                            entry.documentUri != null -> ReportExporter.importFromExcelXlsx(
+                                context = context,
+                                uri = entry.documentUri,
+                                driverId = driverId,
+                                settings = appSettings
+                            )
+                            else -> Result.failure(IllegalStateException("Selected file is unreadable."))
+                        }
+                    }
+                    onImportExcel(res)
+                }
+            },
+            onChangeFolderPermission = {
+                showImportBrowserDialog = false
+                runCatching { importFolderPickerLauncher.launch(null) }
+                    .onFailure {
+                        onUiMessage("System folder picker unavailable on this device.")
+                    }
+            },
+            onOpenSystemPicker = {
+                showImportBrowserDialog = false
+                runCatching { systemImportLauncher.launch(arrayOf("*/*")) }
+                    .onFailure {
+                        onUiMessage("System file picker unavailable on this device.")
+                    }
             }
         )
     }

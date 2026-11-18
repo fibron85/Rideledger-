@@ -21,22 +21,33 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.LocalGasStation
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Today
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,9 +65,9 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.local.entity.DriverAccountEntity
 import com.example.data.local.entity.RideEntity
+import com.example.domain.FinanceUiState
 import com.example.domain.RideCalculator
 import com.example.ui.theme.Amber500
-import com.example.ui.theme.Emerald400
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.Sky500
 import com.example.ui.viewmodel.DailyChartPoint
@@ -68,12 +79,17 @@ import com.example.ui.viewmodel.PlatformSummary
 fun DashboardScreen(
     driver: DriverAccountEntity?,
     dashboardState: DashboardUiState,
+    financeState: FinanceUiState,
     currencyCode: String,
     fuelRatePerKm: Double,
     onAddRideClick: () -> Unit,
     onViewReportsClick: () -> Unit,
+    onOpenFinanceClick: () -> Unit,
+    onLogoutClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showLogoutConfirm by remember { mutableStateOf(false) }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 28.dp),
@@ -101,6 +117,26 @@ fun DashboardScreen(
                             )
                         )
                 )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { showLogoutConfirm = true },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = Color(0xAA0F172A),
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("dashboard_logout_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = "Logout"
+                        )
+                    }
+                }
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -125,7 +161,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "ID ${driver?.driverId ?: ""} • ${RideCalculator.formatDisplayDate(dashboardState.todayIso)}",
+                                text = "ID ${driver?.driverId ?: ""} • Shift ${RideCalculator.formatDisplayDate(dashboardState.todayShiftIso)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFFCBD5E1)
                             )
@@ -162,10 +198,10 @@ fun DashboardScreen(
                     .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Daily Summary Card
+                // Daily Shift Summary Card
                 IncomeHeroCard(
-                    title = "Today's Income",
-                    subtitle = "${dashboardState.todaySummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.todaySummary.totalDistanceKm)} km hired",
+                    title = "Daily Shift Income",
+                    subtitle = "${dashboardState.todaySummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.todaySummary.totalDistanceKm)} km • Shift ${dashboardState.shiftWindowLabel}",
                     icon = Icons.Default.Today,
                     summary = dashboardState.todaySummary,
                     currencyCode = currencyCode,
@@ -173,10 +209,10 @@ fun DashboardScreen(
                     testTag = "daily_summary_card"
                 )
 
-                // Monthly Summary Card
+                // Monthly Summary Card (Day 21 to Day 20)
                 IncomeHeroCard(
-                    title = "Monthly Income (${RideCalculator.formatMonthLabel(dashboardState.currentMonthPrefix)})",
-                    subtitle = "${dashboardState.monthSummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.monthSummary.totalDistanceKm)} km total",
+                    title = "Monthly Income (${dashboardState.currentBillingCycle.label})",
+                    subtitle = "${dashboardState.monthSummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.monthSummary.totalDistanceKm)} km • 21st–20th cycle",
                     icon = Icons.Default.CalendarMonth,
                     summary = dashboardState.monthSummary,
                     currencyCode = currencyCode,
@@ -184,38 +220,113 @@ fun DashboardScreen(
                     testTag = "monthly_summary_card"
                 )
 
-                // Active Fuel Rate Chip Strip
+                // Active Fuel Rate & Shift Window Chip Strip
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.LocalGasStation,
-                                contentDescription = null,
-                                tint = Amber500,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocalGasStation,
+                                    contentDescription = null,
+                                    tint = Amber500,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Universal Fuel Rate",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
-                                text = "Universal Fuel Rate",
-                                style = MaterialTheme.typography.bodyMedium,
+                                text = "${RideCalculator.formatMoney(fuelRatePerKm, currencyCode)} / km",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    tint = Sky500,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Configured Shift Timing",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = dashboardState.shiftWindowLabel,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // Pending Finance Quick Strip
+                Card(
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalanceWallet,
+                                    contentDescription = null,
+                                    tint = Emerald500,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Finance Balance Due",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Text(
+                                text = "Cash on Hand: ${RideCalculator.formatMoney(financeState.cashOnHandGross, currencyCode)} • Other Due: ${RideCalculator.formatMoney(financeState.otherPaymentDueGross, currencyCode)}",
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Text(
-                            text = "${RideCalculator.formatMoney(fuelRatePerKm, currencyCode)} / km",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FilledTonalButton(
+                            onClick = onOpenFinanceClick,
+                            modifier = Modifier.testTag("dashboard_open_finance_button")
+                        ) {
+                            Text("Finance")
+                        }
                     }
                 }
 
@@ -235,14 +346,14 @@ fun DashboardScreen(
                     )
                 }
 
-                // Today's Rides Section Header
+                // Today's Shift Rides Section Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Today's Rides",
+                        text = "Current Shift Rides",
                         style = MaterialTheme.typography.titleLarge
                     )
                     FilledTonalButton(
@@ -255,7 +366,7 @@ fun DashboardScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Daily Report")
+                        Text("Reports & Export")
                     }
                 }
             }
@@ -286,11 +397,11 @@ fun DashboardScreen(
                             modifier = Modifier.size(40.dp)
                         )
                         Text(
-                            text = "No rides logged today yet",
+                            text = "No rides logged for this shift yet",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "Tap \"New Ride\" to log a trip. Fuel, commission, booking fees, and net income calculate automatically.",
+                            text = "Tap \"New Ride\" to log a trip. Fuel, commission, booking fees, shift day, and net income calculate automatically.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -309,6 +420,33 @@ fun DashboardScreen(
                 }
             }
         }
+    }
+
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Sign Out of RideLedger?") },
+            text = {
+                Text("Your local rides and settings stay safely saved on this device for Driver #${driver?.driverId ?: ""}.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLogoutConfirm = false
+                        onLogoutClick()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_logout_button")
+                ) {
+                    Text("Sign Out")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -370,7 +508,6 @@ private fun IncomeHeroCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Gross Income Tile
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = MaterialTheme.shapes.medium,
@@ -393,7 +530,6 @@ private fun IncomeHeroCard(
                     }
                 }
 
-                // Net Income Tile
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
                     shape = MaterialTheme.shapes.medium,
@@ -418,7 +554,6 @@ private fun IncomeHeroCard(
                 }
             }
 
-            // Visual Proportional Split Bar (Net vs Fuel vs Salik vs Commission/Booking)
             if (summary.grossIncome > 0.0) {
                 val gross = summary.grossIncome.coerceAtLeast(0.01)
                 val netRatio = (summary.netIncome.coerceAtLeast(0.0) / gross).toFloat().coerceIn(0f, 1f)
@@ -494,7 +629,7 @@ private fun MonthlyTrendChartCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Daily Net vs Gross Trend", style = MaterialTheme.typography.titleMedium)
+                Text("Cycle Net vs Gross Trend", style = MaterialTheme.typography.titleMedium)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -541,13 +676,13 @@ private fun MonthlyTrendChartCard(
                 val first = points.first()
                 val best = points.maxByOrNull { it.netIncome }
                 Text(
-                    text = "Days active: ${points.size}",
+                    text = "Shifts active: ${points.size}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (best != null) {
                     Text(
-                        text = "Best day (${best.dateIso.takeLast(2)}): ${RideCalculator.formatMoney(best.netIncome, currencyCode)} net",
+                        text = "Best shift (${best.dateIso.takeLast(2)}): ${RideCalculator.formatMoney(best.netIncome, currencyCode)} net",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium
@@ -596,7 +731,7 @@ private fun PlatformBreakdownCard(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("This Month by Platform", style = MaterialTheme.typography.titleMedium)
+            Text("Cycle Breakdown by Platform", style = MaterialTheme.typography.titleMedium)
             breakdown.forEach { item ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -609,8 +744,9 @@ private fun PlatformBreakdownCard(
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
+                        val platformFareLabel = if (RideCalculator.usesYourEarningLabel(item.platformName)) "Your Earning" else "Gross"
                         Text(
-                            text = "${item.rideCount} rides • Gross ${RideCalculator.formatMoney(item.grossIncome, currencyCode)}",
+                            text = "${item.rideCount} rides • $platformFareLabel ${RideCalculator.formatMoney(item.grossIncome, currencyCode)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -658,15 +794,33 @@ fun RideSummaryRowCard(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
-                    Text(
-                        text = ride.pickupPointName,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (ride.pickupPointName.isNotBlank()) {
+                        Text(
+                            text = ride.pickupPointName,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = ride.paymentMethod.ifBlank { "Cash" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                 }
+                val farePrefix = if (RideCalculator.usesYourEarningLabel(ride.platformName)) "Your Earning" else "Gross"
                 Text(
-                    text = "${RideCalculator.formatDecimal(ride.distanceKm)} km • Gross ${RideCalculator.formatMoney(ride.grossFare, currencyCode)} • Fuel ${RideCalculator.formatMoney(ride.fuelCost, currencyCode)}",
+                    text = if (ride.distanceKm > 0.0) {
+                        "${RideCalculator.toTimeLabel(ride.rideDateMillis)} • ${RideCalculator.formatDecimal(ride.distanceKm)} km • $farePrefix ${RideCalculator.formatMoney(ride.grossFare, currencyCode)}"
+                    } else {
+                        "${RideCalculator.toTimeLabel(ride.rideDateMillis)} • $farePrefix ${RideCalculator.formatMoney(ride.grossFare, currencyCode)}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

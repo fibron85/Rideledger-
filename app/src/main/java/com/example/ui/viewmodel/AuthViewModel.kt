@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -80,6 +81,16 @@ class AuthViewModel(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = AuthSessionState.Loading
+        )
+
+    val biometricDriver: StateFlow<DriverAccountEntity?> = repository.biometricDriverId
+        .flatMapLatest { driverId ->
+            if (driverId.isNullOrBlank()) flowOf(null) else repository.observeDriver(driverId)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
         )
 
     fun setMode(mode: AuthMode) {
@@ -290,6 +301,41 @@ class AuthViewModel(
                 }
             )
         }
+    }
+
+    fun loginWithBiometric() {
+        viewModelScope.launch {
+            val driverId = biometricDriver.value?.driverId ?: repository.biometricDriverId.first()
+            if (driverId.isNullOrBlank()) {
+                _uiState.update { it.copy(errorMessage = "Fingerprint login is not enabled yet.") }
+                return@launch
+            }
+            _uiState.update { it.copy(isLoading = true, errorMessage = null, successMessage = null) }
+            repository.loginWithBiometric(driverId).fold(
+                onSuccess = {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            passwordInput = "",
+                            confirmPasswordInput = "",
+                            errorMessage = null
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            errorMessage = error.message ?: "Fingerprint sign-in failed."
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun reportBiometricError(message: String) {
+        _uiState.update { it.copy(errorMessage = message) }
     }
 
     fun logout() {

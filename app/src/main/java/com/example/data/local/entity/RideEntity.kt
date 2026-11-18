@@ -18,6 +18,7 @@ data class RideEntity(
     val rideDateIso: String,
     val platformName: String,
     val pickupPointName: String,
+    val paymentMethod: String = "Cash",
     val distanceKm: Double,
     val grossFare: Double,
     val fuelCostPerKmApplied: Double,
@@ -27,5 +28,7 @@ data class RideEntity(
     val bookingFee: Double,
     val netIncome: Double,
     val notes: String = "",
+    val isSubmittedToFinance: Boolean = false,
+    val financeSubmittedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis()
 )

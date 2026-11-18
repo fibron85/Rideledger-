@@ -10,10 +10,16 @@ import com.example.data.local.entity.DriverAccountEntity
 import com.example.data.local.entity.PickupPointEntity
 import com.example.data.local.entity.PlatformEntity
 import com.example.data.local.entity.RideEntity
+import com.example.domain.BillingCycle
 import com.example.domain.RideCalculator
 import com.example.domain.SecurityUtils
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+
+data class ImportResult(
+    val importedCount: Int,
+    val skippedDuplicates: Int
+)
 
 class RideLedgerRepository(
     private val driverDao: DriverDao,
@@ -22,6 +28,12 @@ class RideLedgerRepository(
     private val sessionManager: SessionManager
 ) {
     val activeDriverId: Flow<String?> = sessionManager.activeDriverId
+
+    val biometricDriverId: Flow<String?> = sessionManager.biometricDriverId
+
+    val storageSetupCompleted: Flow<Boolean> = sessionManager.storageSetupCompleted
+
+    val grantedFolderUri: Flow<String?> = sessionManager.grantedFolderUri
 
     val platforms: Flow<List<PlatformEntity>> = settingsDao.observePlatforms()
 
@@ -87,6 +99,34 @@ class RideLedgerRepository(
         sessionManager.setActiveDriverId(cleanId)
         ensureDefaultsPopulated()
         return Result.success(driver)
+    }
+
+    suspend fun loginWithBiometric(driverId: String): Result<DriverAccountEntity> {
+        val cleanId = driverId.trim()
+        val driver = driverDao.getDriverById(cleanId)
+            ?: run {
+                sessionManager.setBiometricDriverId(null)
+                return Result.failure(IllegalStateException("Enrolled local driver account no longer exists."))
+            }
+        sessionManager.setActiveDriverId(driver.driverId)
+        ensureDefaultsPopulated()
+        return Result.success(driver)
+    }
+
+    suspend fun setBiometricEnabled(driverId: String, enabled: Boolean) {
+        if (enabled) {
+            sessionManager.setBiometricDriverId(driverId.trim())
+        } else {
+            sessionManager.setBiometricDriverId(null)
+        }
+    }
+
+    suspend fun setStorageSetupCompleted(completed: Boolean) {
+        sessionManager.setStorageSetupCompleted(completed)
+    }
+
+    suspend fun setGrantedFolderUri(uriString: String?) {
+        sessionManager.setGrantedFolderUri(uriString)
     }
 
     suspend fun resetPassword(
@@ -241,11 +281,31 @@ class RideLedgerRepository(
             return Result.failure(IllegalArgumentException("Fuel cost per km cannot be negative."))
         }
         val cleanCurrency = currencyCode.trim().uppercase().ifEmpty { "AED" }
+        val current = settingsDao.getAppSettings() ?: AppSettingsEntity()
         settingsDao.upsertAppSettings(
-            AppSettingsEntity(
+            current.copy(
                 id = 1,
                 fuelCostPerKm = RideCalculator.round2(fuelCostPerKm),
                 currencyCode = cleanCurrency
+            )
+        )
+        return Result.success(Unit)
+    }
+
+    suspend fun updateShiftTiming(
+        shiftStartHour: Int,
+        shiftStartMinute: Int,
+        shiftEndHour: Int,
+        shiftEndMinute: Int
+    ): Result<Unit> {
+        val current = settingsDao.getAppSettings() ?: AppSettingsEntity()
+        settingsDao.upsertAppSettings(
+            current.copy(
+                id = 1,
+                shiftStartHour = shiftStartHour.coerceIn(0, 23),
+                shiftStartMinute = shiftStartMinute.coerceIn(0, 59),
+                shiftEndHour = shiftEndHour.coerceIn(0, 23),
+                shiftEndMinute = shiftEndMinute.coerceIn(0, 59)
             )
         )
         return Result.success(Unit)
@@ -256,4 +316,63 @@ class RideLedgerRepository(
     suspend fun deleteRide(ride: RideEntity) = rideDao.deleteRide(ride)
 
     suspend fun getRideById(id: Long): RideEntity? = rideDao.getRideById(id)
+
+    suspend fun submitRidesToFinance(rideIds: List<Long>) {
+        if (rideIds.isEmpty()) return
+        rideDao.markRidesSubmittedToFinance(
+            rideIds = rideIds.distinct(),
+            submittedAt = System.currentTimeMillis()
+        )
+    }
+
+    suspend fun deleteRidesForCycle(
+        driverId: String,
+        cycle: BillingCycle,
+        settings: AppSettingsEntity
+    ): Int {
+        val allRides = rideDao.getAllRidesForDriverOnce(driverId)
+        val targetIds = allRides
+            .filter { ride ->
+                val shiftIso = RideCalculator.computeShiftDateIso(ride.rideDateMillis, settings)
+                shiftIso >= cycle.startDateIso && shiftIso <= cycle.endDateIso
+            }
+            .map { it.id }
+
+        if (targetIds.isEmpty()) return 0
+        targetIds.chunked(500).forEach { batch ->
+            rideDao.deleteRidesByIds(batch)
+        }
+        return targetIds.size
+    }
+
+    suspend fun importBackupRides(
+        driverId: String,
+        importedRides: List<RideEntity>
+    ): ImportResult {
+        if (importedRides.isEmpty()) return ImportResult(0, 0)
+        val existingRides = rideDao.getAllRidesForDriverOnce(driverId)
+        val existingKeys = existingRides.map { rideDedupeKey(it) }.toMutableSet()
+
+        val toInsert = mutableListOf<RideEntity>()
+        var skipped = 0
+        for (ride in importedRides) {
+            val normalized = ride.copy(id = 0L, driverId = driverId)
+            val key = rideDedupeKey(normalized)
+            if (existingKeys.add(key)) {
+                toInsert.add(normalized)
+            } else {
+                skipped++
+            }
+        }
+        if (toInsert.isNotEmpty()) {
+            rideDao.insertRides(toInsert)
+        }
+        return ImportResult(importedCount = toInsert.size, skippedDuplicates = skipped)
+    }
+
+    private fun rideDedupeKey(ride: RideEntity): String {
+        val dateStr = RideCalculator.toIsoDate(ride.rideDateMillis)
+        val timeStr = RideCalculator.toTimeLabel(ride.rideDateMillis)
+        return "$dateStr|$timeStr|${ride.platformName.trim().lowercase()}|${ride.paymentMethod.trim().lowercase()}|${RideCalculator.round2(ride.grossFare)}|${RideCalculator.round2(ride.netIncome)}"
+    }
 }

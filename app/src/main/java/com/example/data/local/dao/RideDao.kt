@@ -30,6 +30,18 @@ interface RideDao {
     @Update
     suspend fun updateRide(ride: RideEntity)
 
+    @Query("SELECT * FROM rides WHERE driverId = :driverId ORDER BY rideDateIso DESC, createdAt DESC")
+    suspend fun getAllRidesForDriverOnce(driverId: String): List<RideEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRides(rides: List<RideEntity>)
+
     @Delete
     suspend fun deleteRide(ride: RideEntity)
+
+    @Query("DELETE FROM rides WHERE id IN (:rideIds)")
+    suspend fun deleteRidesByIds(rideIds: List<Long>)
+
+    @Query("UPDATE rides SET isSubmittedToFinance = 1, financeSubmittedAt = :submittedAt WHERE id IN (:rideIds)")
+    suspend fun markRidesSubmittedToFinance(rideIds: List<Long>, submittedAt: Long)
 }

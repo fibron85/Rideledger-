@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
@@ -26,10 +27,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.Percent
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Toll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -50,7 +53,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.data.local.entity.AppSettingsEntity
 import com.example.data.local.entity.PickupPointEntity
 import com.example.data.local.entity.PlatformEntity
 import com.example.domain.RideCalculator
@@ -74,11 +80,12 @@ fun AddRideScreen(
     formState: RideFormState,
     platforms: List<PlatformEntity>,
     pickupPoints: List<PickupPointEntity>,
-    fuelCostPerKm: Double,
-    currencyCode: String,
+    appSettings: AppSettingsEntity,
     onDateSelected: (Long) -> Unit,
+    onTimeSelected: (Int, Int) -> Unit,
     onPlatformSelected: (String) -> Unit,
     onPickupPointSelected: (String) -> Unit,
+    onPaymentMethodSelected: (String) -> Unit,
     onDistanceChanged: (String) -> Unit,
     onGrossFareChanged: (String) -> Unit,
     onSalikCostChanged: (String) -> Unit,
@@ -91,11 +98,16 @@ fun AddRideScreen(
     modifier: Modifier = Modifier
 ) {
     var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
     var platformDropdownExpanded by remember { mutableStateOf(false) }
     var pickupDropdownExpanded by remember { mutableStateOf(false) }
 
+    val fuelCostPerKm = appSettings.fuelCostPerKm
+    val currencyCode = appSettings.currencyCode
     val fuelCost = formState.computedFuelCost(fuelCostPerKm)
     val netIncome = formState.computedNetIncome(fuelCostPerKm)
+    val computedShiftIso = formState.computedShiftDateIso(appSettings)
+    val withinShift = formState.isWithinShift(appSettings)
 
     Column(
         modifier = modifier
@@ -139,50 +151,106 @@ fun AddRideScreen(
                 }
             }
 
-            // Date Picker Row
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 1.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showDatePicker = true }
-                    .testTag("ride_date_selector")
-            ) {
+            // Date & Time Selectors + Shift Attribution Chip
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.CalendarToday,
-                            contentDescription = "Ride date",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Ride Date",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp,
+                        modifier = Modifier
+                            .weight(1.35f)
+                            .clickable { showDatePicker = true }
+                            .testTag("ride_date_selector")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarToday,
+                                contentDescription = "Ride date",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
                             )
-                            Text(
-                                text = RideCalculator.formatDisplayDate(formState.dateIso),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Ride Date",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = RideCalculator.formatDisplayDate(formState.dateIso),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
-                    TextButton(onClick = { showDatePicker = true }) {
-                        Text("Change")
+
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp,
+                        modifier = Modifier
+                            .weight(0.85f)
+                            .clickable { showTimePicker = true }
+                            .testTag("ride_time_selector")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Schedule,
+                                contentDescription = "Ride time",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Time",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = RideCalculator.toTimeLabel(formState.rideHour, formState.rideMinute),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
+                }
+
+                Surface(
+                    color = if (withinShift) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                    },
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (withinShift) {
+                            "Shift Income Day: ${RideCalculator.formatDisplayDate(computedShiftIso)} (Shift ${RideCalculator.formatShiftWindow(appSettings)})"
+                        } else {
+                            "Outside shift (${RideCalculator.formatShiftWindow(appSettings)}) — counted on ${RideCalculator.formatDisplayDate(computedShiftIso)}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
                 }
             }
 
-            // Platform & Pickup Selection Card
+            // Platform, Conditional Pickup & Payment Method Card
             Card(
                 shape = MaterialTheme.shapes.large,
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -193,9 +261,8 @@ fun AddRideScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text("Trip Source", style = MaterialTheme.typography.titleMedium)
+                    Text("Trip Source & Payment", style = MaterialTheme.typography.titleMedium)
 
-                    // Platform Dropdown + Quick Chips
                     ExposedDropdownMenuBox(
                         expanded = platformDropdownExpanded,
                         onExpandedChange = { platformDropdownExpanded = it }
@@ -249,57 +316,103 @@ fun AddRideScreen(
                         }
                     }
 
-                    // Pickup Point Dropdown + Quick Chips
-                    ExposedDropdownMenuBox(
-                        expanded = pickupDropdownExpanded,
-                        onExpandedChange = { pickupDropdownExpanded = it }
-                    ) {
-                        OutlinedTextField(
-                            value = formState.selectedPickupPoint,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Pickup Point") },
-                            leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
-                            trailingIcon = {
-                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = pickupDropdownExpanded)
-                            },
-                            modifier = Modifier
-                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                                .fillMaxWidth()
-                                .testTag("pickup_dropdown")
-                        )
-                        ExposedDropdownMenu(
-                            expanded = pickupDropdownExpanded,
-                            onDismissRequest = { pickupDropdownExpanded = false }
-                        ) {
-                            pickupPoints.forEach { pickup ->
-                                DropdownMenuItem(
-                                    text = { Text(pickup.name) },
-                                    onClick = {
-                                        onPickupPointSelected(pickup.name)
-                                        pickupDropdownExpanded = false
-                                    }
+                    // Pickup Point option shown ONLY when Platform is Bolt or DTC
+                    // Bolt excludes DTC pickup points; DTC excludes Bolt pickup points.
+                    val visiblePickupPoints = remember(pickupPoints, formState.selectedPlatform) {
+                        pickupPoints.filter {
+                            RideCalculator.isPickupPointAllowedForPlatform(formState.selectedPlatform, it.name)
+                        }
+                    }
+
+                    AnimatedVisibility(visible = formState.showPickupPoint) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ExposedDropdownMenuBox(
+                                expanded = pickupDropdownExpanded,
+                                onExpandedChange = { pickupDropdownExpanded = it }
+                            ) {
+                                OutlinedTextField(
+                                    value = formState.selectedPickupPoint,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Pickup Point") },
+                                    leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
+                                    trailingIcon = {
+                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = pickupDropdownExpanded)
+                                    },
+                                    modifier = Modifier
+                                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                        .fillMaxWidth()
+                                        .testTag("pickup_dropdown")
                                 )
+                                ExposedDropdownMenu(
+                                    expanded = pickupDropdownExpanded,
+                                    onDismissRequest = { pickupDropdownExpanded = false }
+                                ) {
+                                    visiblePickupPoints.forEach { pickup ->
+                                        DropdownMenuItem(
+                                            text = { Text(pickup.name) },
+                                            onClick = {
+                                                onPickupPointSelected(pickup.name)
+                                                pickupDropdownExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (visiblePickupPoints.isNotEmpty()) {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    visiblePickupPoints.forEach { pickup ->
+                                        val selected = pickup.name.equals(formState.selectedPickupPoint, ignoreCase = true)
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = { onPickupPointSelected(pickup.name) },
+                                            label = { Text(pickup.name) },
+                                            leadingIcon = if (selected) {
+                                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                            } else null
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
 
-                    if (pickupPoints.isNotEmpty()) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            pickupPoints.forEach { pickup ->
-                                val selected = pickup.name.equals(formState.selectedPickupPoint, ignoreCase = true)
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = { onPickupPointSelected(pickup.name) },
-                                    label = { Text(pickup.name) },
-                                    leadingIcon = if (selected) {
-                                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                                    } else null
-                                )
-                            }
+                    HorizontalDivider()
+
+                    // Payment Method (Available for ALL platforms)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Payment,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Payment Method",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        formState.allowedPaymentMethods.forEach { method ->
+                            val selected = method.equals(formState.paymentMethod, ignoreCase = true)
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onPaymentMethodSelected(method) },
+                                label = { Text(method) },
+                                leadingIcon = if (selected) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null,
+                                modifier = Modifier.testTag("payment_method_${method.lowercase()}")
+                            )
                         }
                     }
                 }
@@ -316,32 +429,60 @@ fun AddRideScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text("Fare & Deductions", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = if (formState.isDtcEventBooking) "DTC Event Booking Fare" else "Fare & Deductions",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+
+                    if (formState.isDtcEventBooking) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "DTC Event Booking: Hired distance, fuel, Salik, and booking fee are skipped. Full fare equals both Gross and Net Income.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        OutlinedTextField(
-                            value = formState.distanceInput,
-                            onValueChange = onDistanceChanged,
-                            label = { Text("Hired Distance (km)") },
-                            placeholder = { Text("0.0") },
-                            leadingIcon = { Icon(Icons.Default.Route, contentDescription = null) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Decimal,
-                                imeAction = ImeAction.Next
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("distance_input")
-                        )
+                        if (!formState.isDtcEventBooking) {
+                            OutlinedTextField(
+                                value = formState.distanceInput,
+                                onValueChange = onDistanceChanged,
+                                label = { Text("Hired Distance (km)") },
+                                placeholder = { Text("0.0") },
+                                leadingIcon = { Icon(Icons.Default.Route, contentDescription = null) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Next
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("distance_input")
+                            )
+                        }
 
                         OutlinedTextField(
                             value = formState.grossFareInput,
                             onValueChange = onGrossFareChanged,
-                            label = { Text("Gross Fare ($currencyCode)") },
+                            label = {
+                                Text(
+                                    when {
+                                        formState.isDtcEventBooking -> "Full Fare ($currencyCode)"
+                                        formState.usesYourEarningLabel -> "Your Earning ($currencyCode)"
+                                        else -> "Gross Fare ($currencyCode)"
+                                    }
+                                )
+                            },
                             placeholder = { Text("0.00") },
                             leadingIcon = { Icon(Icons.Default.AttachMoney, contentDescription = null) },
                             singleLine = true,
@@ -355,69 +496,73 @@ fun AddRideScreen(
                         )
                     }
 
-                    // Automatic Fuel Cost Calculation Banner
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("auto_fuel_cost_display")
-                    ) {
-                        Row(
+                    // Automatic Fuel Cost hidden for DTC Event Booking
+                    AnimatedVisibility(visible = formState.showDistanceAndFuel) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .testTag("auto_fuel_cost_display")
                         ) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.LocalGasStation,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.secondary
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = "Fuel Cost (Auto-Calculated)",
-                                        style = MaterialTheme.typography.labelLarge
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LocalGasStation,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary
                                     )
-                                    Text(
-                                        text = "${RideCalculator.formatDecimal(formState.distanceKm)} km × ${RideCalculator.formatMoney(fuelCostPerKm, currencyCode)}/km",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Fuel Cost (Auto-Calculated)",
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
+                                        Text(
+                                            text = "${RideCalculator.formatDecimal(formState.distanceKm)} km × ${RideCalculator.formatMoney(fuelCostPerKm, currencyCode)}/km",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
+                                Text(
+                                    text = RideCalculator.formatMoney(fuelCost, currencyCode),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-                            Text(
-                                text = RideCalculator.formatMoney(fuelCost, currencyCode),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
                         }
                     }
 
-                    // Salik Cost (Manual)
-                    OutlinedTextField(
-                        value = formState.salikCostInput,
-                        onValueChange = onSalikCostChanged,
-                        label = { Text("Salik Cost ($currencyCode) — Manual") },
-                        placeholder = { Text("0.00") },
-                        leadingIcon = { Icon(Icons.Default.Toll, contentDescription = null) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Decimal,
-                            imeAction = ImeAction.Next
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("salik_cost_input")
-                    )
+                    // Manual Salik hidden for DTC Event Booking and Uber
+                    AnimatedVisibility(visible = formState.showSalikCost) {
+                        OutlinedTextField(
+                            value = formState.salikCostInput,
+                            onValueChange = onSalikCostChanged,
+                            label = { Text("Salik Cost ($currencyCode) — Manual") },
+                            placeholder = { Text("0.00") },
+                            leadingIcon = { Icon(Icons.Default.Toll, contentDescription = null) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = ImeAction.Next
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("salik_cost_input")
+                        )
+                    }
 
-                    // Conditional Bolt Commission (Visible ONLY when Platform == Bolt AND Pickup is Street Hail or Bolt OTP / OTP Booking)
+                    // Conditional Bolt Commission
                     AnimatedVisibility(visible = formState.showBoltCommission) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             OutlinedTextField(
@@ -441,7 +586,7 @@ fun AddRideScreen(
                         }
                     }
 
-                    // Conditional Booking Fee (Visible ONLY when Platform == Bolt or DTC)
+                    // Conditional Booking Fee (Bolt or DTC, excluded for DTC Event Booking)
                     AnimatedVisibility(visible = formState.showBookingFee) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
@@ -449,7 +594,7 @@ fun AddRideScreen(
                                 onValueChange = onBookingFeeChanged,
                                 label = { Text("${formState.selectedPlatform} Booking Fee ($currencyCode)") },
                                 placeholder = { Text("0.00") },
-                                leadingIcon = { Icon(Icons.Default.ReceiptLong, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null) },
                                 supportingText = {
                                     Text("Add or edit booking fee for ${formState.selectedPickupPoint}")
                                 },
@@ -512,13 +657,22 @@ fun AddRideScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Live Income Calculation",
+                        text = "Live Income Calculation (${formState.paymentMethod})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
-                    ReceiptLine("Gross Fare", RideCalculator.formatMoney(formState.grossFare, currencyCode))
-                    ReceiptLine("− Fuel Cost", RideCalculator.formatMoney(fuelCost, currencyCode))
-                    ReceiptLine("− Salik Cost", RideCalculator.formatMoney(formState.salikCost, currencyCode))
+                    val fareReceiptLabel = when {
+                        formState.isDtcEventBooking -> "Full Fare"
+                        formState.usesYourEarningLabel -> "Your Earning"
+                        else -> "Gross Fare"
+                    }
+                    ReceiptLine(fareReceiptLabel, RideCalculator.formatMoney(formState.grossFare, currencyCode))
+                    if (formState.showDistanceAndFuel) {
+                        ReceiptLine("− Fuel Cost", RideCalculator.formatMoney(fuelCost, currencyCode))
+                    }
+                    if (formState.showSalikCost) {
+                        ReceiptLine("− Salik Cost", RideCalculator.formatMoney(formState.effectiveSalikCost, currencyCode))
+                    }
                     if (formState.showBoltCommission) {
                         ReceiptLine("− Bolt Commission", RideCalculator.formatMoney(formState.effectiveCommission, currencyCode))
                     }
@@ -604,6 +758,34 @@ fun AddRideScreen(
         ) {
             DatePicker(state = datePickerState)
         }
+    }
+
+    if (showTimePicker) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = formState.rideHour,
+            initialMinute = formState.rideMinute,
+            is24Hour = true
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            title = { Text("Select Ride Time") },
+            text = { TimePicker(state = timePickerState) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onTimeSelected(timePickerState.hour, timePickerState.minute)
+                        showTimePicker = false
+                    }
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

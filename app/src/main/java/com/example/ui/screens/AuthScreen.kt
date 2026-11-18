@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -37,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -64,12 +66,16 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.local.entity.DriverAccountEntity
 import com.example.ui.viewmodel.AuthMode
 import com.example.ui.viewmodel.AuthUiState
 
 @Composable
 fun AuthScreen(
     uiState: AuthUiState,
+    biometricDriver: DriverAccountEntity?,
+    isBiometricAvailable: Boolean,
+    onBiometricLogin: () -> Unit,
     onModeChange: (AuthMode) -> Unit,
     onDriverIdChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
@@ -326,6 +332,31 @@ fun AuthScreen(
                                 Text(
                                     text = if (uiState.mode == AuthMode.LOGIN) "Sign In" else "Create Local Account",
                                     style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        if (uiState.mode == AuthMode.LOGIN && isBiometricAvailable && biometricDriver != null) {
+                            OutlinedButton(
+                                onClick = onBiometricLogin,
+                                enabled = !uiState.isLoading,
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("biometric_login_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Fingerprint,
+                                    contentDescription = "Sign in with fingerprint",
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                val driverLabel = biometricDriver.fullName.ifBlank { "Driver #${biometricDriver.driverId}" }
+                                Text(
+                                    text = "Fingerprint Sign In • $driverLabel",
+                                    style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
