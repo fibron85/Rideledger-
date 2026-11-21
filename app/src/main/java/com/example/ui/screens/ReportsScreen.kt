@@ -9,12 +9,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CalendarViewDay
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -38,6 +42,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TableView
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,6 +53,7 @@ import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.entity.AppSettingsEntity
 import com.example.data.local.entity.DriverAccountEntity
@@ -80,6 +87,12 @@ import com.example.domain.RideCalculator
 import com.example.ui.components.ExportDestinationDialog
 import com.example.ui.components.ImportFileBrowserDialog
 import com.example.ui.components.ImportPermissionDialog
+import com.example.ui.components.PaymentMethodSymbolBadge
+import com.example.ui.components.PlatformPillBadge
+import com.example.ui.components.SettledBadge
+import com.example.ui.components.TipPillBadge
+import com.example.ui.components.paymentMethodIcon
+import com.example.ui.components.sleekCardBorder
 import com.example.ui.theme.Amber500
 import com.example.ui.theme.Emerald500
 import com.example.ui.viewmodel.DailyReportGroup
@@ -121,6 +134,7 @@ fun ReportsScreen(
     onFolderPermissionGranted: (String) -> Unit,
     onExportCompleted: (Result<Unit>, String) -> Unit,
     onImportExcel: (Result<List<RideEntity>>) -> Unit,
+    onOpenDailySummaryClick: () -> Unit,
     onUiMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -136,6 +150,7 @@ fun ReportsScreen(
     var showImportPermissionDialog by remember { mutableStateOf(false) }
     var showImportBrowserDialog by remember { mutableStateOf(false) }
     var browserStartInAppFolder by remember { mutableStateOf(false) }
+    var filtersExpanded by remember { mutableStateOf(false) }
     var expandedDayIso by remember(reportGroups) {
         mutableStateOf(reportGroups.firstOrNull()?.dateIso)
     }
@@ -308,7 +323,7 @@ fun ReportsScreen(
         val isExpandedLayout = maxWidth >= 840.dp
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Billing Cycle (21st–20th) / Date Filter Bar + Export Buttons
+            // Sleek Compact Top Header + Collapsible Filter Drawer
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 1.dp,
@@ -318,8 +333,8 @@ fun ReportsScreen(
                     modifier = Modifier
                         .widthIn(max = 1040.dp)
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -332,39 +347,59 @@ fun ReportsScreen(
                         ) {
                             IconButton(
                                 onClick = { onShiftCycle(-1) },
-                                modifier = Modifier.testTag("report_prev_month")
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("report_prev_month")
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous billing month")
                             }
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = selectedCycle.label,
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "21st–20th Cycle • Shift ${RideCalculator.formatShiftWindow(appSettings)}",
+                                    text = "21st–20th • Shift ${RideCalculator.formatShiftWindow(appSettings)}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             IconButton(
                                 onClick = { onShiftCycle(1) },
-                                modifier = Modifier.testTag("report_next_month")
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("report_next_month")
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next billing month")
                             }
                         }
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             if (selectedDateFilter != null) {
                                 FilterChip(
                                     selected = true,
                                     onClick = { onDateFilterSelected(null) },
-                                    label = { Text(selectedDateFilter) },
+                                    label = { Text(selectedDateFilter.takeLast(5), maxLines = 1) },
                                     trailingIcon = {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear day filter", modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Default.Close, contentDescription = "Clear day filter", modifier = Modifier.size(14.dp))
                                     }
+                                )
+                            }
+                            IconButton(
+                                onClick = onOpenDailySummaryClick,
+                                modifier = Modifier.testTag("reports_daily_summary_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarViewDay,
+                                    contentDescription = "Daily Summary"
                                 )
                             }
                             IconButton(
@@ -373,108 +408,133 @@ fun ReportsScreen(
                             ) {
                                 Icon(Icons.Default.CalendarMonth, contentDescription = "Pick specific day")
                             }
+                            FilledTonalIconButton(
+                                onClick = { filtersExpanded = !filtersExpanded },
+                                modifier = Modifier.testTag("reports_toggle_filters_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Toggle search & filters",
+                                    tint = if (filtersExpanded || hasActiveFilter) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
 
-                    // Search & Platform / Payment Method Filters for Daily Shift Income
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChanged,
-                        placeholder = { Text("Search platform, payment method, pickup, note...") },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { onSearchQueryChanged("") }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear search")
+                    // Collapsible Search & Platform / Payment Filters
+                    AnimatedVisibility(visible = filtersExpanded || hasActiveFilter) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = onSearchQueryChanged,
+                                placeholder = { Text("Search platform, pickup, note...") },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { onSearchQueryChanged("") }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("shift_search_input")
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = selectedPlatformFilter == null,
+                                    onClick = { onPlatformFilterSelected(null) },
+                                    label = { Text("All Platforms") },
+                                    modifier = Modifier.testTag("filter_platform_all")
+                                )
+                                platforms.forEach { platform ->
+                                    FilterChip(
+                                        selected = selectedPlatformFilter.equals(platform.name, ignoreCase = true),
+                                        onClick = {
+                                            onPlatformFilterSelected(
+                                                if (selectedPlatformFilter.equals(platform.name, ignoreCase = true)) null
+                                                else platform.name
+                                            )
+                                        },
+                                        label = { Text(platform.name) },
+                                        modifier = Modifier.testTag("filter_platform_${platform.name}")
+                                    )
                                 }
                             }
-                        },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("shift_search_input")
-                    )
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilterChip(
-                            selected = selectedPlatformFilter == null,
-                            onClick = { onPlatformFilterSelected(null) },
-                            label = { Text("All Platforms") },
-                            modifier = Modifier.testTag("filter_platform_all")
-                        )
-                        platforms.forEach { platform ->
-                            FilterChip(
-                                selected = selectedPlatformFilter.equals(platform.name, ignoreCase = true),
-                                onClick = {
-                                    onPlatformFilterSelected(
-                                        if (selectedPlatformFilter.equals(platform.name, ignoreCase = true)) null
-                                        else platform.name
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = selectedPaymentFilter == null,
+                                    onClick = { onPaymentFilterSelected(null) },
+                                    label = { Text("All Pay") },
+                                    modifier = Modifier.testTag("filter_payment_all")
+                                )
+                                RideCalculator.PAYMENT_METHODS.forEach { method ->
+                                    FilterChip(
+                                        selected = selectedPaymentFilter.equals(method, ignoreCase = true),
+                                        onClick = {
+                                            onPaymentFilterSelected(
+                                                if (selectedPaymentFilter.equals(method, ignoreCase = true)) null
+                                                else method
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = paymentMethodIcon(method),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text(method) },
+                                        modifier = Modifier.testTag("filter_payment_$method")
                                     )
-                                },
-                                label = { Text(platform.name) },
-                                modifier = Modifier.testTag("filter_platform_${platform.name}")
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilterChip(
-                            selected = selectedPaymentFilter == null,
-                            onClick = { onPaymentFilterSelected(null) },
-                            label = { Text("All Payments") },
-                            modifier = Modifier.testTag("filter_payment_all")
-                        )
-                        RideCalculator.PAYMENT_METHODS.forEach { method ->
-                            FilterChip(
-                                selected = selectedPaymentFilter.equals(method, ignoreCase = true),
-                                onClick = {
-                                    onPaymentFilterSelected(
-                                        if (selectedPaymentFilter.equals(method, ignoreCase = true)) null
-                                        else method
-                                    )
-                                },
-                                label = { Text(method) },
-                                modifier = Modifier.testTag("filter_payment_$method")
-                            )
+                                }
+                            }
                         }
                     }
 
                     // Period totals summary bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         SummaryStatPill(
                             label = "Rides",
-                            value = "${cycleSummary.rideCount} (${RideCalculator.formatDecimal(cycleSummary.totalDistanceKm)} km)",
+                            value = "${cycleSummary.rideCount} • ${RideCalculator.formatDecimal(cycleSummary.totalDistanceKm)} km",
                             modifier = Modifier.weight(1f)
                         )
                         SummaryStatPill(
-                            label = "Gross Total",
-                            value = RideCalculator.formatMoney(cycleSummary.grossIncome, currencyCode),
+                            label = if (cycleSummary.totalTips > 0.0) "Fare (+Tips)" else "Total Fare",
+                            value = if (cycleSummary.totalTips > 0.0) {
+                                "${RideCalculator.formatMoney(cycleSummary.grossIncome, currencyCode)} (+${RideCalculator.formatDecimal(cycleSummary.totalTips)})"
+                            } else {
+                                RideCalculator.formatMoney(cycleSummary.grossIncome, currencyCode)
+                            },
                             modifier = Modifier.weight(1f)
                         )
                         SummaryStatPill(
-                            label = "Net Total",
+                            label = "Net Income",
                             value = RideCalculator.formatMoney(cycleSummary.netIncome, currencyCode),
                             highlight = true,
                             modifier = Modifier.weight(1f)
                         )
                     }
 
-                    // Local Excel & PDF Export + Excel Import Actions (Destination folder & browser)
+                    // Local Excel & PDF Export + Excel Import Actions
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -485,9 +545,10 @@ fun ReportsScreen(
                                 pendingExport = PendingReportExport("RideLedger_$fileTag.xlsx", isPdf = false)
                             },
                             enabled = reportGroups.isNotEmpty(),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             modifier = Modifier
                                 .weight(1f)
+                                .height(40.dp)
                                 .testTag("export_excel_button")
                         ) {
                             Icon(Icons.Default.TableView, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -501,9 +562,10 @@ fun ReportsScreen(
                                 pendingExport = PendingReportExport("RideLedger_$fileTag.pdf", isPdf = true)
                             },
                             enabled = reportGroups.isNotEmpty(),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             modifier = Modifier
                                 .weight(1f)
+                                .height(40.dp)
                                 .testTag("export_pdf_button")
                         ) {
                             Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -520,9 +582,10 @@ fun ReportsScreen(
                                     showImportPermissionDialog = true
                                 }
                             },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             modifier = Modifier
                                 .weight(1f)
+                                .height(40.dp)
                                 .testTag("reports_import_excel_button")
                         ) {
                             Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -881,25 +944,31 @@ private fun SummaryStatPill(
         } else {
             MaterialTheme.colorScheme.surfaceContainerLow
         },
+        border = sleekCardBorder(if (highlight) 0.7f else 0.45f),
         shape = MaterialTheme.shapes.small,
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = if (highlight) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                color = if (highlight) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DailyReportHeaderCard(
     group: DailyReportGroup,
@@ -912,14 +981,15 @@ private fun DailyReportHeaderCard(
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isExpanded) 3.dp else 1.dp),
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isExpanded) 2.dp else 0.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .testTag("daily_report_card_${group.dateIso}")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -931,29 +1001,34 @@ private fun DailyReportHeaderCard(
                     Text(
                         text = RideCalculator.formatDisplayDate(group.dateIso),
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "${s.rideCount} rides • ${RideCalculator.formatDecimal(s.totalDistanceKm)} km hired",
+                        text = "${s.rideCount} rides • ${RideCalculator.formatDecimal(s.totalDistanceKm)} km",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             text = RideCalculator.formatMoney(s.netIncome, currencyCode),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1
                         )
                         Text(
-                            text = "Gross ${RideCalculator.formatMoney(s.grossIncome, currencyCode)}",
+                            text = "Fare ${RideCalculator.formatMoney(s.grossIncome, currencyCode)}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = if (isExpanded) "Collapse day rides" else "Expand day rides"
@@ -961,22 +1036,25 @@ private fun DailyReportHeaderCard(
                 }
             }
 
-            HorizontalDivider()
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                if (s.totalTips > 0.0) {
+                    MiniExpenseTag("Tips", "+${RideCalculator.formatDecimal(s.totalTips)}", highlight = true)
+                }
                 MiniExpenseTag("Fuel", RideCalculator.formatDecimal(s.totalFuel))
                 MiniExpenseTag("Salik", RideCalculator.formatDecimal(s.totalSalik))
                 MiniExpenseTag("Comm", RideCalculator.formatDecimal(s.totalCommission))
                 MiniExpenseTag("Booking", RideCalculator.formatDecimal(s.totalBookingFee))
             }
 
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (group.isShiftSubmittedToFinance) {
                     Surface(
@@ -1008,20 +1086,23 @@ private fun DailyReportHeaderCard(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
-                            text = "${group.unsubmittedShiftRideIds.size} rides due (${RideCalculator.formatMoney(group.unsubmittedShiftGross, currencyCode)})",
+                            text = "${group.unsubmittedShiftRideIds.size} due (${RideCalculator.formatMoney(group.unsubmittedShiftGross, currencyCode)})",
                             style = MaterialTheme.typography.labelSmall,
                             color = Amber500,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
                     FilledTonalButton(
                         onClick = onSubmitToFinance,
-                        modifier = Modifier.testTag("shift_submit_finance_${group.dateIso}")
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("shift_submit_finance_${group.dateIso}")
                     ) {
-                        Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Submit to Finance")
+                        Text("Submit to Finance", maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -1030,21 +1111,27 @@ private fun DailyReportHeaderCard(
 }
 
 @Composable
-private fun MiniExpenseTag(label: String, value: String) {
+private fun MiniExpenseTag(
+    label: String,
+    value: String,
+    highlight: Boolean = false
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (highlight) Emerald500 else MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            color = if (highlight) Emerald500 else MaterialTheme.colorScheme.onSurface
         )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DetailedRideReportCard(
     ride: RideEntity,
@@ -1055,12 +1142,14 @@ private fun DetailedRideReportCard(
     Card(
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        border = sleekCardBorder(0.45f),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
+            // Compact Responsive Header: [Platform Pill] [Pickup • Time] ... [Payment Icon Symbol] [Settled Icon] [Edit] [Delete]
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1068,85 +1157,79 @@ private fun DetailedRideReportCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = ride.platformName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
+                    PlatformPillBadge(platformName = ride.platformName)
                     Text(
                         text = if (ride.pickupPointName.isNotBlank()) {
                             "${ride.pickupPointName} • ${RideCalculator.toTimeLabel(ride.rideDateMillis)}"
                         } else {
-                            "${RideCalculator.toIsoDate(ride.rideDateMillis)} ${RideCalculator.toTimeLabel(ride.rideDateMillis)}"
+                            RideCalculator.toTimeLabel(ride.rideDateMillis)
                         },
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = ride.paymentMethod.ifBlank { "Cash" },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                    if (ride.isSubmittedToFinance) {
-                        Surface(
-                            color = Emerald500.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = "Settled",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Emerald500,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
                 }
 
-                Row {
-                    IconButton(onClick = onEdit, modifier = Modifier.size(40.dp)) {
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Payment Method rendered strictly as a crisp Icon/Symbol badge
+                    PaymentMethodSymbolBadge(paymentMethod = ride.paymentMethod)
+                    if (ride.isSubmittedToFinance) {
+                        SettledBadge(compact = true)
+                    }
+                    IconButton(onClick = onEdit, modifier = Modifier.size(34.dp)) {
                         Icon(
                             Icons.Default.Edit,
                             contentDescription = "Edit ride",
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(17.dp)
                         )
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = "Delete ride",
                             tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(17.dp)
                         )
                     }
                 }
             }
 
-            Row(
+            // Metrics strip: Distance, Fare, Optional Tip
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    text = "Distance: ${RideCalculator.formatDecimal(ride.distanceKm)} km",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                val fareLabel = if (RideCalculator.usesYourEarningLabel(ride.platformName)) "Your Earning" else "Gross"
+                val fareLabel = when {
+                    RideCalculator.isDtcEventBookingPlatform(ride.platformName) -> "Full Fare"
+                    RideCalculator.usesYourEarningLabel(ride.platformName) -> "Your Earning"
+                    else -> "Fare"
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (ride.distanceKm > 0.0) {
+                        Text(
+                            text = "${RideCalculator.formatDecimal(ride.distanceKm)} km",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (ride.tips > 0.0) {
+                        TipPillBadge(amountText = RideCalculator.formatMoney(ride.tips, currencyCode))
+                    }
+                }
                 Text(
                     text = "$fareLabel: ${RideCalculator.formatMoney(ride.grossFare, currencyCode)}",
                     style = MaterialTheme.typography.bodySmall,
@@ -1154,21 +1237,25 @@ private fun DetailedRideReportCard(
                 )
             }
 
+            // Costs & Net Income row
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 val costParts = buildList {
-                    add("Fuel ${RideCalculator.formatDecimal(ride.fuelCost)}")
+                    if (ride.fuelCost > 0) add("Fuel ${RideCalculator.formatDecimal(ride.fuelCost)}")
                     if (ride.salikCost > 0) add("Salik ${RideCalculator.formatDecimal(ride.salikCost)}")
                     if (ride.boltCommission > 0) add("Comm ${RideCalculator.formatDecimal(ride.boltCommission)}")
-                    if (ride.bookingFee > 0) add("Booking ${RideCalculator.formatDecimal(ride.bookingFee)}")
-                }.joinToString(" • ")
+                    if (ride.bookingFee > 0) add("Book ${RideCalculator.formatDecimal(ride.bookingFee)}")
+                }.joinToString(" • ").ifBlank { "No deductions" }
 
                 Text(
                     text = costParts,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -1176,7 +1263,8 @@ private fun DetailedRideReportCard(
                     text = "Net ${RideCalculator.formatMoney(ride.netIncome, currencyCode)}",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1
                 )
             }
 
@@ -1184,7 +1272,9 @@ private fun DetailedRideReportCard(
                 Text(
                     text = "Note: ${ride.notes}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

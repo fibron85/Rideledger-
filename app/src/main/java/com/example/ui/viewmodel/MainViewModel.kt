@@ -10,9 +10,12 @@ import com.example.data.local.entity.PlatformEntity
 import com.example.data.local.entity.RideEntity
 import com.example.data.repository.RideLedgerRepository
 import com.example.domain.BillingCycle
+import com.example.domain.DailySummaryItem
 import com.example.domain.FinanceSummaryCalculator
 import com.example.domain.FinanceUiState
 import com.example.domain.RideCalculator
+import com.example.util.InAppReminderPrompt
+import com.example.util.RideReminderScheduler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +41,8 @@ data class PeriodSummary(
     val totalCommission: Double = 0.0,
     val totalBookingFee: Double = 0.0,
     val totalDistanceKm: Double = 0.0,
-    val rideCount: Int = 0
+    val rideCount: Int = 0,
+    val totalTips: Double = 0.0
 ) {
     val totalCosts: Double
         get() = RideCalculator.round2(totalFuel + totalSalik + totalCommission + totalBookingFee)
@@ -92,6 +96,7 @@ data class RideFormState(
     val paymentMethod: String = "Cash",
     val distanceInput: String = "",
     val grossFareInput: String = "",
+    val tipsInput: String = "",
     val salikCostInput: String = "",
     val boltCommissionInput: String = "",
     val bookingFeeInput: String = "",
@@ -102,6 +107,7 @@ data class RideFormState(
 ) {
     val distanceKm: Double get() = distanceInput.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
     val grossFare: Double get() = grossFareInput.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+    val rawTips: Double get() = tipsInput.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
     val salikCost: Double get() = salikCostInput.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
     val rawCommission: Double get() = boltCommissionInput.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
     val rawBookingFee: Double get() = bookingFeeInput.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
@@ -118,6 +124,9 @@ data class RideFormState(
     val showSalikCost: Boolean
         get() = RideCalculator.showsSalikCost(selectedPlatform, selectedPickupPoint)
 
+    val showTips: Boolean
+        get() = RideCalculator.showsTips(selectedPlatform, selectedPickupPoint)
+
     val showBoltCommission: Boolean
         get() = showPickupPoint && RideCalculator.showsBoltCommission(selectedPlatform, selectedPickupPoint)
 
@@ -132,6 +141,9 @@ data class RideFormState(
 
     val effectiveDistanceKm: Double
         get() = if (showDistanceAndFuel) distanceKm else 0.0
+
+    val effectiveTips: Double
+        get() = if (showTips) rawTips else 0.0
 
     val effectiveSalikCost: Double
         get() = if (showSalikCost) salikCost else 0.0
@@ -163,7 +175,8 @@ data class RideFormState(
                 fuelCost = computedFuelCost(fuelCostPerKm),
                 salikCost = effectiveSalikCost,
                 boltCommission = effectiveCommission,
-                bookingFee = effectiveBookingFee
+                bookingFee = effectiveBookingFee,
+                tips = effectiveTips
             )
         }
 }
@@ -189,6 +202,24 @@ class MainViewModel(
 
     val pickupPoints: StateFlow<List<PickupPointEntity>> = repository.pickupPoints
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val remindersEnabled: StateFlow<Boolean> = repository.remindersEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    private val _reminderClockTick = MutableStateFlow(System.currentTimeMillis())
+
+    val activeInAppReminder: StateFlow<InAppReminderPrompt?> = combine(
+        remindersEnabled,
+        repository.dismissedReminderSlot,
+        _reminderClockTick
+    ) { enabled, dismissedSlot, nowMillis ->
+        if (!enabled) {
+            null
+        } else {
+            val active = RideReminderScheduler.activeInAppReminder(nowMillis)
+            if (active != null && active.slotKey != dismissedSlot) active else null
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val activeDriver: StateFlow<DriverAccountEntity?> = repository.activeDriverId
         .flatMapLatest { id ->
@@ -277,10 +308,63 @@ class MainViewModel(
         FinanceSummaryCalculator.computeFinanceState(rides, settings)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FinanceUiState())
 
+    val activeFinanceInAppReminder: StateFlow<InAppReminderPrompt?> = combine(
+        remindersEnabled,
+        financeState,
+        appSettings,
+        repository.dismissedFinanceReminderSlot,
+        _reminderClockTick
+    ) { enabled, finance, settings, dismissedSlot, nowMillis ->
+        if (!enabled) {
+            null
+        } else {
+            val active = RideReminderScheduler.activeFinanceInAppReminder(
+                nowMillis = nowMillis,
+                financeState = finance,
+                currencyCode = settings.currencyCode
+            )
+            if (active != null && active.slotKey != dismissedSlot) active else null
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _selectedReportCycle = MutableStateFlow(
         RideCalculator.getBillingCycleForDate(RideCalculator.currentIsoDate())
     )
     val selectedReportCycle: StateFlow<BillingCycle> = _selectedReportCycle
+
+    private val _dailySummaryCycle = MutableStateFlow(
+        RideCalculator.getBillingCycleForDate(RideCalculator.currentIsoDate())
+    )
+    val dailySummaryCycle: StateFlow<BillingCycle> = _dailySummaryCycle
+
+    val dailySummaryItems: StateFlow<List<DailySummaryItem>> = combine(
+        allRides,
+        appSettings,
+        _dailySummaryCycle
+    ) { rides, settings, cycle ->
+        FinanceSummaryCalculator.buildDailyCycleBreakdown(rides, settings, cycle)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val dailySummaryMonthTotals: StateFlow<PeriodSummary> = combine(
+        dailySummaryItems,
+        flowOf(Unit)
+    ) { items, _ ->
+        if (items.isEmpty()) {
+            PeriodSummary()
+        } else {
+            PeriodSummary(
+                grossIncome = RideCalculator.round2(items.sumOf { it.summary.grossIncome }),
+                netIncome = RideCalculator.round2(items.sumOf { it.summary.netIncome }),
+                totalFuel = RideCalculator.round2(items.sumOf { it.summary.totalFuel }),
+                totalSalik = RideCalculator.round2(items.sumOf { it.summary.totalSalik }),
+                totalCommission = RideCalculator.round2(items.sumOf { it.summary.totalCommission }),
+                totalBookingFee = RideCalculator.round2(items.sumOf { it.summary.totalBookingFee }),
+                totalDistanceKm = RideCalculator.round2(items.sumOf { it.summary.totalDistanceKm }),
+                rideCount = items.sumOf { it.summary.rideCount },
+                totalTips = RideCalculator.round2(items.sumOf { it.summary.totalTips })
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PeriodSummary())
 
     private val _selectedReportDateFilter = MutableStateFlow<String?>(null)
     val selectedReportDateFilter: StateFlow<String?> = _selectedReportDateFilter
@@ -359,7 +443,7 @@ class MainViewModel(
                     summary = aggregateRides(dayRides),
                     rides = dayRides,
                     unsubmittedShiftRideIds = unsubmitted.map { it.id },
-                    unsubmittedShiftGross = RideCalculator.round2(unsubmitted.sumOf { it.grossFare }),
+                    unsubmittedShiftGross = RideCalculator.round2(unsubmitted.sumOf { it.grossFare + it.tips }),
                     totalShiftRideCount = allDayRides.size
                 )
             }
@@ -547,6 +631,10 @@ class MainViewModel(
         _rideFormState.update { it.copy(grossFareInput = sanitizeDecimalInput(value), errorMessage = null) }
     }
 
+    fun onTipsChanged(value: String) {
+        _rideFormState.update { it.copy(tipsInput = sanitizeDecimalInput(value), errorMessage = null) }
+    }
+
     fun onSalikCostChanged(value: String) {
         _rideFormState.update { it.copy(salikCostInput = sanitizeDecimalInput(value), errorMessage = null) }
     }
@@ -581,6 +669,7 @@ class MainViewModel(
             paymentMethod = ride.paymentMethod.ifBlank { "Cash" },
             distanceInput = if (ride.distanceKm > 0.0) formatEditableNumber(ride.distanceKm) else "",
             grossFareInput = formatEditableNumber(ride.grossFare),
+            tipsInput = if (ride.tips > 0.0) formatEditableNumber(ride.tips) else "",
             salikCostInput = if (ride.salikCost > 0.0) formatEditableNumber(ride.salikCost) else "",
             boltCommissionInput = if (ride.boltCommission > 0.0) formatEditableNumber(ride.boltCommission) else "",
             bookingFeeInput = if (ride.bookingFee > 0.0) formatEditableNumber(ride.bookingFee) else "",
@@ -634,7 +723,7 @@ class MainViewModel(
         } else {
             state.distanceInput.toDoubleOrNull()?.takeIf { it >= 0.0 }
                 ?: run {
-                    _rideFormState.update { it.copy(errorMessage = "Enter a valid hired distance (km).") }
+                    _rideFormState.update { it.copy(errorMessage = "Enter a valid distance (km).") }
                     return
                 }
         }
@@ -643,7 +732,7 @@ class MainViewModel(
             val fareLabel = when {
                 state.isDtcEventBooking -> "Full Fare"
                 state.usesYourEarningLabel -> "Your Earning"
-                else -> "Gross Fare"
+                else -> "Fare"
             }
             _rideFormState.update { it.copy(errorMessage = "Enter a valid $fareLabel greater than 0.") }
             return
@@ -655,6 +744,7 @@ class MainViewModel(
         val salikCost = if (state.showSalikCost) RideCalculator.round2(state.salikCost) else 0.0
         val boltCommission = RideCalculator.round2(state.effectiveCommission)
         val bookingFee = RideCalculator.round2(state.effectiveBookingFee)
+        val tips = RideCalculator.round2(state.effectiveTips)
         val netIncome = if (state.isDtcEventBooking) {
             RideCalculator.round2(grossVal)
         } else {
@@ -663,7 +753,8 @@ class MainViewModel(
                 fuelCost = fuelCost,
                 salikCost = salikCost,
                 boltCommission = boltCommission,
-                bookingFee = bookingFee
+                bookingFee = bookingFee,
+                tips = tips
             )
         }
         val timestampMillis = state.combinedTimestampMillis
@@ -695,6 +786,7 @@ class MainViewModel(
                 boltCommission = boltCommission,
                 bookingFee = bookingFee,
                 netIncome = netIncome,
+                tips = tips,
                 notes = state.notesInput.trim(),
                 isSubmittedToFinance = existingRide?.isSubmittedToFinance ?: false,
                 financeSubmittedAt = existingRide?.financeSubmittedAt,
@@ -749,6 +841,12 @@ class MainViewModel(
     fun shiftReportCycle(deltaMonths: Int) {
         _selectedReportDateFilter.value = null
         _selectedReportCycle.update { current ->
+            RideCalculator.shiftBillingCycle(current.startDateIso, deltaMonths)
+        }
+    }
+
+    fun shiftDailySummaryCycle(deltaMonths: Int) {
+        _dailySummaryCycle.update { current ->
             RideCalculator.shiftBillingCycle(current.startDateIso, deltaMonths)
         }
     }
@@ -829,10 +927,40 @@ class MainViewModel(
         }
     }
 
-    fun addPlatform(name: String) {
+    fun setRemindersEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            repository.addPlatform(name).fold(
-                onSuccess = { _events.emit(UiEvent.ShowMessage("Platform \"$name\" added.")) },
+            repository.setRemindersEnabled(enabled)
+            _reminderClockTick.value = System.currentTimeMillis()
+            _events.emit(
+                UiEvent.ShowMessage(
+                    if (enabled) "Daily 4:00 PM & 4:00 AM ride reminders enabled."
+                    else "Daily ride reminders paused."
+                )
+            )
+        }
+    }
+
+    fun dismissActiveInAppReminder(slotKey: String) {
+        viewModelScope.launch {
+            repository.setDismissedReminderSlot(slotKey)
+        }
+    }
+
+    fun dismissFinanceInAppReminder(slotKey: String) {
+        viewModelScope.launch {
+            repository.setDismissedFinanceReminderSlot(slotKey)
+        }
+    }
+
+    fun refreshInAppReminder() {
+        _reminderClockTick.value = System.currentTimeMillis()
+    }
+
+    fun addPlatform(name: String) {
+        val clean = RideCalculator.normalizePlatformInput(name)
+        viewModelScope.launch {
+            repository.addPlatform(clean).fold(
+                onSuccess = { _events.emit(UiEvent.ShowMessage("Platform \"$clean\" added.")) },
                 onFailure = { _events.emit(UiEvent.ShowMessage(it.message ?: "Failed to add platform.")) }
             )
         }
@@ -840,8 +968,10 @@ class MainViewModel(
 
     fun deletePlatform(platform: PlatformEntity) {
         viewModelScope.launch {
-            repository.deletePlatform(platform)
-            _events.emit(UiEvent.ShowMessage("Platform \"${platform.name}\" removed."))
+            repository.deletePlatform(platform).fold(
+                onSuccess = { _events.emit(UiEvent.ShowMessage("Platform \"${platform.name}\" removed.")) },
+                onFailure = { _events.emit(UiEvent.ShowMessage(it.message ?: "Default platforms cannot be deleted.")) }
+            )
         }
     }
 

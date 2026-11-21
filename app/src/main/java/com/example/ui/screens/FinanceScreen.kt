@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -45,10 +46,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.domain.FinanceShiftSummary
 import com.example.domain.FinanceUiState
 import com.example.domain.RideCalculator
+import com.example.ui.components.PaymentMethodSymbolBadge
+import com.example.ui.components.sleekCardBorder
 import com.example.ui.theme.Amber500
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.Sky500
@@ -93,81 +97,117 @@ fun FinanceScreen(
 
         // Top Two Summary Cards: Cash on Hand vs Other Payment Due from Finance
         item {
-            Column(
+            BoxWithConstraints(
                 modifier = Modifier
                     .widthIn(max = 760.dp)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    FinanceMetricCard(
-                        title = "CASH ON HAND",
-                        amountText = RideCalculator.formatMoney(financeState.cashOnHandGross, currencyCode),
-                        subText = "${financeState.cashRideCount} unsubmitted cash rides\nNet: ${RideCalculator.formatMoney(financeState.cashOnHandNet, currencyCode)}",
-                        icon = Icons.Default.Payments,
-                        accentColor = Amber500,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("finance_cash_on_hand_card")
-                    )
-
-                    FinanceMetricCard(
-                        title = "OTHER DUE FROM FINANCE",
-                        amountText = RideCalculator.formatMoney(financeState.otherPaymentDueGross, currencyCode),
-                        subText = "${financeState.otherPaymentRideCount} Card / InAppPaid / Account\nNet: ${RideCalculator.formatMoney(financeState.otherPaymentDueNet, currencyCode)}",
-                        icon = Icons.Default.CreditCard,
-                        accentColor = Sky500,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("finance_other_due_card")
-                    )
-                }
-
-                // Breakdown of Other Payment Due (Card, InAppPaid, Account)
-                if (financeState.otherPaymentBreakdown.isNotEmpty()) {
-                    Card(
-                        shape = MaterialTheme.shapes.large,
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = "Other Payment Due Breakdown",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
+                val stackMetrics = maxWidth < 340.dp
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (stackMetrics) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            FinanceMetricCard(
+                                title = "CASH ON HAND",
+                                amountText = RideCalculator.formatMoney(financeState.cashOnHandGross, currencyCode),
+                                subText = "${financeState.cashRideCount} unsubmitted cash rides\nNet: ${RideCalculator.formatMoney(financeState.cashOnHandNet, currencyCode)}",
+                                icon = Icons.Default.Payments,
+                                accentColor = Amber500,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("finance_cash_on_hand_card")
                             )
-                            financeState.otherPaymentBreakdown.forEachIndexed { index, item ->
-                                if (index > 0) HorizontalDivider()
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column {
+                            FinanceMetricCard(
+                                title = "OTHER DUE FROM FINANCE",
+                                amountText = RideCalculator.formatMoney(financeState.otherPaymentDueGross, currencyCode),
+                                subText = "${financeState.otherPaymentRideCount} Card / InAppPaid / Account\nNet: ${RideCalculator.formatMoney(financeState.otherPaymentDueNet, currencyCode)}",
+                                icon = Icons.Default.CreditCard,
+                                accentColor = Sky500,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("finance_other_due_card")
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            FinanceMetricCard(
+                                title = "CASH ON HAND",
+                                amountText = RideCalculator.formatMoney(financeState.cashOnHandGross, currencyCode),
+                                subText = "${financeState.cashRideCount} unsubmitted cash rides\nNet: ${RideCalculator.formatMoney(financeState.cashOnHandNet, currencyCode)}",
+                                icon = Icons.Default.Payments,
+                                accentColor = Amber500,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("finance_cash_on_hand_card")
+                            )
+                            FinanceMetricCard(
+                                title = "OTHER DUE FROM FINANCE",
+                                amountText = RideCalculator.formatMoney(financeState.otherPaymentDueGross, currencyCode),
+                                subText = "${financeState.otherPaymentRideCount} Card / InAppPaid / Account\nNet: ${RideCalculator.formatMoney(financeState.otherPaymentDueNet, currencyCode)}",
+                                icon = Icons.Default.CreditCard,
+                                accentColor = Sky500,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("finance_other_due_card")
+                            )
+                        }
+                    }
+
+                    // Breakdown of Other Payment Due (Card, InAppPaid, Account)
+                    if (financeState.otherPaymentBreakdown.isNotEmpty()) {
+                        Card(
+                            shape = MaterialTheme.shapes.large,
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = sleekCardBorder(),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Other Payment Due Breakdown",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                financeState.otherPaymentBreakdown.forEachIndexed { index, item ->
+                                    if (index > 0) HorizontalDivider()
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            PaymentMethodSymbolBadge(paymentMethod = item.method)
+                                            Column {
+                                                Text(
+                                                    text = item.method,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Text(
+                                                    text = "${item.rideCount} unsubmitted rides • Net ${RideCalculator.formatMoney(item.netAmount, currencyCode)}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = item.method,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Text(
-                                            text = "${item.rideCount} unsubmitted rides • Net ${RideCalculator.formatMoney(item.netAmount, currencyCode)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            text = RideCalculator.formatMoney(item.grossAmount, currencyCode),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Sky500,
+                                            maxLines = 1
                                         )
                                     }
-                                    Text(
-                                        text = RideCalculator.formatMoney(item.grossAmount, currencyCode),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Sky500
-                                    )
                                 }
                             }
                         }
@@ -374,12 +414,13 @@ private fun FinanceMetricCard(
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = modifier
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -389,20 +430,24 @@ private fun FinanceMetricCard(
                     imageVector = icon,
                     contentDescription = null,
                     tint = accentColor,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                 )
                 Text(
                     text = title,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Text(
                 text = amountText,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                color = accentColor
+                color = accentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = subText,
@@ -422,7 +467,8 @@ private fun PendingFinanceShiftCard(
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("finance_pending_shift_${shift.shiftDateIso}")

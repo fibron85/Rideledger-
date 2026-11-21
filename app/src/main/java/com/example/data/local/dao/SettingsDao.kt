@@ -17,6 +17,9 @@ interface SettingsDao {
     @Query("SELECT * FROM platforms ORDER BY name COLLATE NOCASE ASC")
     fun observePlatforms(): Flow<List<PlatformEntity>>
 
+    @Query("SELECT * FROM platforms")
+    suspend fun getAllPlatformsOnce(): List<PlatformEntity>
+
     @Query("SELECT COUNT(*) FROM platforms")
     suspend fun getPlatformCount(): Int
 

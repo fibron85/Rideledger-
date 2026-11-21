@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -33,7 +35,9 @@ import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockReset
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Schedule
@@ -60,6 +64,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -74,14 +79,20 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.local.entity.AppSettingsEntity
 import com.example.data.local.entity.DriverAccountEntity
 import com.example.data.local.entity.PickupPointEntity
 import com.example.data.local.entity.PlatformEntity
 import com.example.data.local.entity.RideEntity
 import com.example.domain.BillingCycle
+import com.example.domain.FinanceUiState
 import com.example.domain.RideCalculator
+import com.example.ui.components.AboutAppSectionCard
 import com.example.ui.components.ExportDestinationDialog
 import com.example.ui.components.ImportFileBrowserDialog
 import com.example.ui.components.ImportPermissionDialog
@@ -89,6 +100,7 @@ import com.example.ui.viewmodel.DailyReportGroup
 import com.example.ui.viewmodel.PeriodSummary
 import com.example.util.LocalStorageManager
 import com.example.util.ReportExporter
+import com.example.util.RideReminderScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -103,6 +115,9 @@ fun SettingsScreen(
     isBiometricAvailable: Boolean,
     isBiometricEnabled: Boolean,
     onToggleBiometric: (Boolean) -> Unit,
+    remindersEnabled: Boolean,
+    onSetRemindersEnabled: (Boolean) -> Unit,
+    financeState: FinanceUiState,
     onUpdateProfile: (fullName: String, mobileNumber: String) -> Unit,
     onChangePassword: (currentPin: String, newPin: String, confirmPin: String) -> Unit,
     onUpdateFuelAndCurrency: (fuelText: String, currencyCode: String) -> Unit,
@@ -160,6 +175,61 @@ fun SettingsScreen(
     var showImportPermissionDialog by remember { mutableStateOf(false) }
     var showImportBrowserDialog by remember { mutableStateOf(false) }
     var browserStartInAppFolder by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hasNotificationPermission by remember {
+        mutableStateOf(RideReminderScheduler.hasNotificationPermission(context))
+    }
+    var permissionDeniedOnce by remember { mutableStateOf(false) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasNotificationPermission = RideReminderScheduler.hasNotificationPermission(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val updatedPermission = granted || RideReminderScheduler.hasNotificationPermission(context)
+        hasNotificationPermission = updatedPermission
+        if (updatedPermission) {
+            permissionDeniedOnce = false
+            onSetRemindersEnabled(true)
+            RideReminderScheduler.scheduleDailyReminders(context)
+        } else {
+            permissionDeniedOnce = true
+            onUiMessage("Enable notifications in system settings to receive 4:00 PM & 4:00 AM alerts.")
+        }
+    }
+
+    fun requestNotificationPermissionSafely() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            hasNotificationPermission = RideReminderScheduler.hasNotificationPermission(context)
+            if (!hasNotificationPermission && !RideReminderScheduler.openAppNotificationSettings(context)) {
+                onUiMessage("Notifications are disabled in Android system settings.")
+            }
+            return
+        }
+
+        if (permissionDeniedOnce) {
+            if (!RideReminderScheduler.openAppNotificationSettings(context)) {
+                onUiMessage("Please enable Notifications for RideLedger in Android App Settings.")
+            }
+            return
+        }
+
+        runCatching {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }.onFailure {
+            if (!RideReminderScheduler.openAppNotificationSettings(context)) {
+                onUiMessage("Unable to open system permission prompt; please enable notifications in Android Settings.")
+            }
+        }
+    }
 
     fun buildBackupBytes(): ByteArray {
         return ReportExporter.buildXlsxBytes(
@@ -591,6 +661,129 @@ fun SettingsScreen(
             }
         }
 
+        // 2b. Daily Ride Reminders (4:00 PM & 4:00 AM)
+        item {
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("Daily Ride & Finance Reminders", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "Periodic alerts every day at 4:00 PM and 4:00 AM for ride entry & pending Finance due payments",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = remindersEnabled,
+                            onCheckedChange = { enable ->
+                                if (enable) {
+                                    onSetRemindersEnabled(true)
+                                    RideReminderScheduler.scheduleDailyReminders(context)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        !RideReminderScheduler.hasNotificationPermission(context)
+                                    ) {
+                                        requestNotificationPermissionSafely()
+                                    }
+                                } else {
+                                    onSetRemindersEnabled(false)
+                                    RideReminderScheduler.cancelDailyReminders(context)
+                                }
+                            },
+                            modifier = Modifier.testTag("settings_reminders_switch")
+                        )
+                    }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = if (remindersEnabled) {
+                                    "Scheduled: Everyday at 4:00 PM (16:00) & 4:00 AM (04:00) • Ride entry + Finance dues"
+                                } else {
+                                    "Reminders paused — toggle ON to get 4:00 PM & 4:00 AM alerts"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (remindersEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU || !hasNotificationPermission) {
+                                Text(
+                                    text = if (hasNotificationPermission) {
+                                        "System notification permission: Allowed"
+                                    } else {
+                                        "System notification permission: Not allowed yet (in-app reminders still active)"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (hasNotificationPermission) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+
+                    if (!hasNotificationPermission) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { requestNotificationPermissionSafely() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_allow_notifications_button")
+                            ) {
+                                Text("Allow Notification", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    if (!RideReminderScheduler.openAppNotificationSettings(context)) {
+                                        onUiMessage("Open Android Settings → Apps → RideLedger → Notifications to allow alerts.")
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_system_notifications_button")
+                            ) {
+                                Text("App Settings", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 3. Monthly Backup, Import & Delete (21st-20th Billing Cycle)
         item {
             Card(
@@ -683,7 +876,7 @@ fun SettingsScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "Gross ${RideCalculator.formatMoney(settingsCycleSummary.grossIncome, appSettings.currencyCode)} • Net ${RideCalculator.formatMoney(settingsCycleSummary.netIncome, appSettings.currencyCode)}",
+                                    text = "Fare ${RideCalculator.formatMoney(settingsCycleSummary.grossIncome, appSettings.currencyCode)} • Net ${RideCalculator.formatMoney(settingsCycleSummary.netIncome, appSettings.currencyCode)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.SemiBold
@@ -820,7 +1013,7 @@ fun SettingsScreen(
                         Column {
                             Text("Universal Fuel Cost", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                text = "Applied automatically per km of hired distance on all new rides",
+                                text = "Applied automatically per km of distance on all standard rides",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -885,15 +1078,26 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.DirectionsCar,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Ride-Sharing Platforms", style = MaterialTheme.typography.titleMedium)
+                            Column {
+                                Text("Ride-Sharing Platforms", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "Bolt, DTC, Uber & DTC Event Booking are locked default platforms",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
                         FilledTonalButton(
                             onClick = { showAddPlatformDialog = true },
                             modifier = Modifier.testTag("settings_add_platform_button")
@@ -904,15 +1108,31 @@ fun SettingsScreen(
                         }
                     }
 
-                    if (platforms.isEmpty()) {
+                    val orderedPlatforms = remember(platforms) {
+                        platforms.sortedWith(
+                            compareBy<PlatformEntity>(
+                                { !RideCalculator.isDefaultPlatform(it.name) },
+                                {
+                                    val idx = RideCalculator.DEFAULT_PLATFORM_NAMES.indexOfFirst { def ->
+                                        def.equals(RideCalculator.normalizePlatformInput(it.name), ignoreCase = true)
+                                    }
+                                    if (idx >= 0) idx else Int.MAX_VALUE
+                                },
+                                { it.name.lowercase() }
+                            )
+                        )
+                    }
+
+                    if (orderedPlatforms.isEmpty()) {
                         Text(
-                            text = "No platforms added yet. Tap Add to create platforms like Bolt or DTC.",
+                            text = "No platforms added yet. Tap Add to create a custom platform.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        platforms.forEachIndexed { index, platform ->
+                        orderedPlatforms.forEachIndexed { index, platform ->
                             if (index > 0) HorizontalDivider()
+                            val isDefault = RideCalculator.isDefaultPlatform(platform.name)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -920,19 +1140,38 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column {
-                                    Text(
-                                        text = platform.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = platform.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        if (isDefault) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                shape = MaterialTheme.shapes.extraSmall
+                                            ) {
+                                                Text(
+                                                    text = "Default",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                     val hint = when {
                                         RideCalculator.isBoltPlatform(platform.name) -> "Uses Pickup Point, Booking Fee & Street Hail/OTP Commission"
                                         RideCalculator.isDtcPlatform(platform.name) -> "Uses Pickup Point & Booking Fee"
                                         RideCalculator.isDtcEventBookingPlatform(platform.name) -> "Event platform (Account payment only; Full Fare = Net Income)"
                                         RideCalculator.isUberPlatform(platform.name) -> "Direct platform (Uses 'Your Earning'; Salik & Pickup hidden)"
                                         RideCalculator.isCareemPlatform(platform.name) -> "Direct platform (Uses 'Your Earning'; Pickup Point hidden)"
-                                        else -> "Direct platform (Pickup Point & Booking Fee hidden)"
+                                        else -> "Custom platform (Pickup Point & Booking Fee hidden)"
                                     }
                                     Text(
                                         text = hint,
@@ -940,15 +1179,32 @@ fun SettingsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                IconButton(
-                                    onClick = { onDeletePlatform(platform) },
-                                    modifier = Modifier.testTag("delete_platform_${platform.name}")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Delete,
-                                        contentDescription = "Delete ${platform.name}",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                if (isDefault) {
+                                    androidx.compose.foundation.layout.Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("default_platform_lock_${platform.name}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = "${platform.name} is a default platform and cannot be deleted",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                } else {
+                                    IconButton(
+                                        onClick = { onDeletePlatform(platform) },
+                                        modifier = Modifier.testTag("delete_platform_${platform.name}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete ${platform.name}",
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1053,6 +1309,14 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+
+        // 6. About
+        item {
+            AboutAppSectionCard(
+                modifier = Modifier.widthIn(max = 720.dp),
+                testTag = "settings_about_section"
+            )
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
@@ -1109,6 +1373,7 @@ fun SettingsScreen(
 
     if (showAddPlatformDialog) {
         AddPlatformDialog(
+            existingPlatformNames = platforms.map { it.name },
             onDismiss = { showAddPlatformDialog = false },
             onConfirm = { name ->
                 onAddPlatform(name)
@@ -1309,10 +1574,20 @@ fun SettingsScreen(
 
 @Composable
 private fun AddPlatformDialog(
+    existingPlatformNames: List<String>,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
+    val cleanInput = remember(name) { RideCalculator.normalizePlatformInput(name) }
+    val matchingExisting = remember(cleanInput, existingPlatformNames) {
+        if (cleanInput.isEmpty()) null
+        else existingPlatformNames.firstOrNull {
+            RideCalculator.normalizePlatformInput(it).equals(cleanInput, ignoreCase = true)
+        }
+    }
+    val isDuplicate = matchingExisting != null
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add Ride-Sharing Platform") },
@@ -1321,8 +1596,16 @@ private fun AddPlatformDialog(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Platform Name") },
-                placeholder = { Text("e.g. Bolt, DTC, Uber, Careem") },
+                placeholder = { Text("e.g. Careem, Yango, InDrive") },
                 singleLine = true,
+                isError = isDuplicate,
+                supportingText = {
+                    if (isDuplicate) {
+                        Text("\"$matchingExisting\" already exists. Please use a different name.")
+                    } else {
+                        Text("Default platforms (Bolt, DTC, Uber, DTC Event Booking) are already included.")
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("dialog_platform_name_input")
@@ -1330,8 +1613,8 @@ private fun AddPlatformDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(name) },
-                enabled = name.isNotBlank(),
+                onClick = { onConfirm(cleanInput) },
+                enabled = cleanInput.isNotEmpty() && !isDuplicate,
                 modifier = Modifier.testTag("dialog_platform_save_button")
             ) {
                 Text("Add")

@@ -7,4 +7,11 @@
     <string name="nav_finance">Finance</string>
     <string name="nav_reports">Reports</string>
     <string name="nav_settings">Settings</string>
+    <string name="about_section_title">About</string>
+    <string name="app_version_text">App Version 1.0.1</string>
+    <string name="about_app_description">RideLedger is an offline-first driver income and expense ledger designed for ride-sharing and taxi drivers. Log shifts, automatically calculate fuel, Salik, and platform commissions, track Finance settlements, and back up monthly cycles securely on your device.</string>
+    <string name="copyright_notice">© 2026 RideLedger. All rights reserved.</string>
+    <string name="developer_credit">Developed by Fakhrul Islam</string>
+    <string name="developer_email">fibron85@gmail.com</string>
+    <string name="developer_mobile">+971558895749</string>
 </resources>

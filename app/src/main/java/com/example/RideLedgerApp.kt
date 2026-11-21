@@ -4,9 +4,11 @@ import android.app.Application
 import com.example.data.local.AppDatabase
 import com.example.data.local.SessionManager
 import com.example.data.repository.RideLedgerRepository
+import com.example.util.RideReminderScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class RideLedgerApp : Application() {
@@ -26,8 +28,12 @@ class RideLedgerApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        RideReminderScheduler.ensureNotificationChannel(this)
         appScope.launch {
             repository.ensureDefaultsPopulated()
+            if (repository.remindersEnabled.first()) {
+                RideReminderScheduler.scheduleDailyReminders(this@RideLedgerApp)
+            }
         }
     }
 }

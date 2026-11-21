@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -16,11 +17,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.CalendarViewDay
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.Assessment
+import androidx.compose.material.icons.outlined.CalendarViewDay
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,7 +39,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -56,6 +61,7 @@ import com.example.ui.components.StorageSetupDialog
 import com.example.ui.screens.AddRideScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CompleteProfileDialog
+import com.example.ui.screens.DailySummaryScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.FinanceScreen
 import com.example.ui.screens.ReportsScreen
@@ -67,6 +73,7 @@ import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.UiEvent
 import com.example.util.BiometricAuthHelper
 import com.example.util.LocalStorageManager
+import com.example.util.RideReminderScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -75,6 +82,7 @@ object AppRoutes {
     const val ROUTE_ADD_RIDE = "add_ride"
     const val ROUTE_REPORTS = "reports"
     const val ROUTE_FINANCE = "finance"
+    const val ROUTE_DAILY_SUMMARY = "daily_summary"
     const val ROUTE_SETTINGS = "settings"
 }
 
@@ -125,9 +133,30 @@ private val mainTabs = listOf(
 )
 
 class MainActivity : FragmentActivity() {
+
+    private val openAddRideFromNotification = mutableStateOf(false)
+    private val openFinanceFromNotification = mutableStateOf(false)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(RideReminderScheduler.EXTRA_OPEN_ADD_RIDE, false)) {
+            openAddRideFromNotification.value = true
+        }
+        if (intent.getBooleanExtra(RideReminderScheduler.EXTRA_OPEN_FINANCE, false)) {
+            openFinanceFromNotification.value = true
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (intent?.getBooleanExtra(RideReminderScheduler.EXTRA_OPEN_ADD_RIDE, false) == true) {
+            openAddRideFromNotification.value = true
+        }
+        if (intent?.getBooleanExtra(RideReminderScheduler.EXTRA_OPEN_FINANCE, false) == true) {
+            openFinanceFromNotification.value = true
+        }
         val repository = (application as RideLedgerApp).repository
 
         setContent {
@@ -194,11 +223,17 @@ class MainActivity : FragmentActivity() {
                     }
 
                     is AuthSessionState.Authenticated -> {
+                        val openAddRideFlag by openAddRideFromNotification
+                        val openFinanceFlag by openFinanceFromNotification
                         AuthenticatedRideLedgerApp(
                             activity = this@MainActivity,
                             mainViewModel = mainViewModel,
                             isBiometricAvailable = isBiometricAvailable,
                             needsProfileSetup = session.needsProfileSetup,
+                            openAddRidePending = openAddRideFlag,
+                            onConsumeOpenAddRide = { openAddRideFromNotification.value = false },
+                            openFinancePending = openFinanceFlag,
+                            onConsumeOpenFinance = { openFinanceFromNotification.value = false },
                             onLogout = authViewModel::logout
                         )
 
@@ -228,6 +263,10 @@ private fun AuthenticatedRideLedgerApp(
     mainViewModel: MainViewModel,
     isBiometricAvailable: Boolean,
     needsProfileSetup: Boolean,
+    openAddRidePending: Boolean,
+    onConsumeOpenAddRide: () -> Unit,
+    openFinancePending: Boolean,
+    onConsumeOpenFinance: () -> Unit,
     onLogout: () -> Unit
 ) {
     val navController = rememberNavController()
@@ -251,9 +290,15 @@ private fun AuthenticatedRideLedgerApp(
     val settingsCycle by mainViewModel.settingsSelectedCycle.collectAsStateWithLifecycle()
     val settingsCycleGroups by mainViewModel.settingsCycleGroups.collectAsStateWithLifecycle()
     val settingsCycleSummary by mainViewModel.settingsCycleSummary.collectAsStateWithLifecycle()
+    val dailySummaryCycle by mainViewModel.dailySummaryCycle.collectAsStateWithLifecycle()
+    val dailySummaryItems by mainViewModel.dailySummaryItems.collectAsStateWithLifecycle()
+    val dailySummaryMonthTotals by mainViewModel.dailySummaryMonthTotals.collectAsStateWithLifecycle()
     val isBiometricEnabled by mainViewModel.isBiometricEnabled.collectAsStateWithLifecycle()
     val storageSetupCompleted by mainViewModel.storageSetupCompleted.collectAsStateWithLifecycle()
     val grantedFolderUri by mainViewModel.grantedFolderUri.collectAsStateWithLifecycle()
+    val remindersEnabled by mainViewModel.remindersEnabled.collectAsStateWithLifecycle()
+    val activeInAppReminder by mainViewModel.activeInAppReminder.collectAsStateWithLifecycle()
+    val activeFinanceInAppReminder by mainViewModel.activeFinanceInAppReminder.collectAsStateWithLifecycle()
 
     val storageSetupFolderLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -316,6 +361,29 @@ private fun AuthenticatedRideLedgerApp(
         }
     }
 
+    LaunchedEffect(remindersEnabled) {
+        if (remindersEnabled) {
+            RideReminderScheduler.scheduleDailyReminders(activity)
+        } else {
+            RideReminderScheduler.cancelDailyReminders(activity)
+        }
+    }
+
+    LaunchedEffect(openAddRidePending, needsProfileSetup) {
+        if (openAddRidePending && !needsProfileSetup) {
+            mainViewModel.resetRideForm()
+            navigateToTab(AppRoutes.ROUTE_ADD_RIDE)
+            onConsumeOpenAddRide()
+        }
+    }
+
+    LaunchedEffect(openFinancePending, needsProfileSetup) {
+        if (openFinancePending && !needsProfileSetup) {
+            navigateToTab(AppRoutes.ROUTE_FINANCE)
+            onConsumeOpenFinance()
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useNavigationRail = maxWidth >= 600.dp
 
@@ -373,6 +441,25 @@ private fun AuthenticatedRideLedgerApp(
                                 modifier = Modifier.testTag(tab.testTag)
                             )
                         }
+                        val summarySelected = currentDestination?.hierarchy?.any {
+                            it.route == AppRoutes.ROUTE_DAILY_SUMMARY
+                        } == true
+                        NavigationRailItem(
+                            selected = summarySelected,
+                            onClick = {
+                                navController.navigate(AppRoutes.ROUTE_DAILY_SUMMARY) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    imageVector = if (summarySelected) Icons.Filled.CalendarViewDay else Icons.Outlined.CalendarViewDay,
+                                    contentDescription = "Daily Summary"
+                                )
+                            },
+                            label = { Text("Summary") },
+                            modifier = Modifier.testTag("nav_daily_summary")
+                        )
                     }
                 }
 
@@ -388,13 +475,24 @@ private fun AuthenticatedRideLedgerApp(
                             financeState = financeState,
                             currencyCode = appSettings.currencyCode,
                             fuelRatePerKm = appSettings.fuelCostPerKm,
+                            remindersEnabled = remindersEnabled,
+                            activeInAppReminder = activeInAppReminder,
+                            activeFinanceInAppReminder = activeFinanceInAppReminder,
+                            onDismissInAppReminder = mainViewModel::dismissActiveInAppReminder,
+                            onDismissFinanceInAppReminder = mainViewModel::dismissFinanceInAppReminder,
                             onAddRideClick = {
                                 mainViewModel.resetRideForm()
                                 navigateToTab(AppRoutes.ROUTE_ADD_RIDE)
                             },
                             onViewReportsClick = { navigateToTab(AppRoutes.ROUTE_REPORTS) },
+                            onOpenDailySummaryClick = {
+                                navController.navigate(AppRoutes.ROUTE_DAILY_SUMMARY) {
+                                    launchSingleTop = true
+                                }
+                            },
                             onOpenFinanceClick = { navigateToTab(AppRoutes.ROUTE_FINANCE) },
-                            onLogoutClick = onLogout
+                            onLogoutClick = onLogout,
+                            onUiMessage = mainViewModel::showUiMessage
                         )
                     }
 
@@ -411,6 +509,7 @@ private fun AuthenticatedRideLedgerApp(
                             onPaymentMethodSelected = mainViewModel::onPaymentMethodSelected,
                             onDistanceChanged = mainViewModel::onDistanceChanged,
                             onGrossFareChanged = mainViewModel::onGrossFareChanged,
+                            onTipsChanged = mainViewModel::onTipsChanged,
                             onSalikCostChanged = mainViewModel::onSalikCostChanged,
                             onBoltCommissionChanged = mainViewModel::onBoltCommissionChanged,
                             onBookingFeeChanged = mainViewModel::onBookingFeeChanged,
@@ -454,7 +553,27 @@ private fun AuthenticatedRideLedgerApp(
                             },
                             onExportCompleted = mainViewModel::notifyExportResult,
                             onImportExcel = mainViewModel::importRidesFromExcel,
+                            onOpenDailySummaryClick = {
+                                navController.navigate(AppRoutes.ROUTE_DAILY_SUMMARY) {
+                                    launchSingleTop = true
+                                }
+                            },
                             onUiMessage = mainViewModel::showUiMessage
+                        )
+                    }
+
+                    composable(AppRoutes.ROUTE_DAILY_SUMMARY) {
+                        DailySummaryScreen(
+                            appSettings = appSettings,
+                            selectedCycle = dailySummaryCycle,
+                            monthTotals = dailySummaryMonthTotals,
+                            dailyItems = dailySummaryItems,
+                            onShiftCycle = mainViewModel::shiftDailySummaryCycle,
+                            onBackClick = { navController.popBackStack() },
+                            onInspectDayClick = { dateIso ->
+                                mainViewModel.setReportDateFilter(dateIso)
+                                navigateToTab(AppRoutes.ROUTE_REPORTS)
+                            }
                         )
                     }
 
@@ -489,6 +608,9 @@ private fun AuthenticatedRideLedgerApp(
                                     mainViewModel.setBiometricEnabled(false)
                                 }
                             },
+                            remindersEnabled = remindersEnabled,
+                            onSetRemindersEnabled = mainViewModel::setRemindersEnabled,
+                            financeState = financeState,
                             onUpdateProfile = mainViewModel::updateProfile,
                             onChangePassword = mainViewModel::changePassword,
                             onUpdateFuelAndCurrency = mainViewModel::updateFuelAndCurrency,

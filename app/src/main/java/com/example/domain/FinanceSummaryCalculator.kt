@@ -12,6 +12,28 @@ data class PaymentMethodDue(
     val netAmount: Double
 )
 
+data class PlatformDaySummary(
+    val platformName: String,
+    val rideCount: Int,
+    val distanceKm: Double,
+    val grossFare: Double,
+    val tips: Double,
+    val totalFuel: Double,
+    val totalSalik: Double,
+    val totalCommission: Double,
+    val totalBookingFee: Double,
+    val netIncome: Double
+) {
+    val totalCosts: Double
+        get() = RideCalculator.round2(totalFuel + totalSalik + totalCommission + totalBookingFee)
+}
+
+data class DailySummaryItem(
+    val dateIso: String,
+    val summary: PeriodSummary,
+    val platformBreakdowns: List<PlatformDaySummary>
+)
+
 data class FinanceShiftSummary(
     val shiftDateIso: String,
     val rideIds: List<Long>,
@@ -58,7 +80,8 @@ object FinanceSummaryCalculator {
             totalCommission = RideCalculator.round2(rides.sumOf { it.boltCommission }),
             totalBookingFee = RideCalculator.round2(rides.sumOf { it.bookingFee }),
             totalDistanceKm = RideCalculator.round2(rides.sumOf { it.distanceKm }),
-            rideCount = rides.size
+            rideCount = rides.size,
+            totalTips = RideCalculator.round2(rides.sumOf { it.tips })
         )
     }
 
@@ -92,6 +115,7 @@ object FinanceSummaryCalculator {
                 ride.notes,
                 shiftDateIso,
                 RideCalculator.formatDecimal(ride.grossFare),
+                RideCalculator.formatDecimal(ride.tips),
                 RideCalculator.formatDecimal(ride.netIncome)
             ).joinToString(" ").lowercase(Locale.US)
             if (!haystack.contains(query)) {
@@ -125,7 +149,7 @@ object FinanceSummaryCalculator {
                 PaymentMethodDue(
                     method = method,
                     rideCount = methodRides.size,
-                    grossAmount = RideCalculator.round2(methodRides.sumOf { it.grossFare }),
+                    grossAmount = RideCalculator.round2(methodRides.sumOf { it.grossFare + it.tips }),
                     netAmount = RideCalculator.round2(methodRides.sumOf { it.netIncome })
                 )
             }
@@ -135,10 +159,10 @@ object FinanceSummaryCalculator {
         val submittedShifts = buildShiftSummaries(submittedWithShift)
 
         return FinanceUiState(
-            cashOnHandGross = RideCalculator.round2(cashPending.sumOf { it.grossFare }),
+            cashOnHandGross = RideCalculator.round2(cashPending.sumOf { it.grossFare + it.tips }),
             cashOnHandNet = RideCalculator.round2(cashPending.sumOf { it.netIncome }),
             cashRideCount = cashPending.size,
-            otherPaymentDueGross = RideCalculator.round2(otherPending.sumOf { it.grossFare }),
+            otherPaymentDueGross = RideCalculator.round2(otherPending.sumOf { it.grossFare + it.tips }),
             otherPaymentDueNet = RideCalculator.round2(otherPending.sumOf { it.netIncome }),
             otherPaymentRideCount = otherPending.size,
             otherPaymentBreakdown = otherBreakdown,
@@ -162,13 +186,54 @@ object FinanceSummaryCalculator {
                     shiftDateIso = shiftIso,
                     rideIds = dayRides.map { it.id },
                     rideCount = dayRides.size,
-                    cashOnHandGross = RideCalculator.round2(cashRides.sumOf { it.grossFare }),
+                    cashOnHandGross = RideCalculator.round2(cashRides.sumOf { it.grossFare + it.tips }),
                     cashOnHandNet = RideCalculator.round2(cashRides.sumOf { it.netIncome }),
-                    otherDueGross = RideCalculator.round2(otherRides.sumOf { it.grossFare }),
+                    otherDueGross = RideCalculator.round2(otherRides.sumOf { it.grossFare + it.tips }),
                     otherDueNet = RideCalculator.round2(otherRides.sumOf { it.netIncome }),
-                    totalGross = RideCalculator.round2(dayRides.sumOf { it.grossFare }),
+                    totalGross = RideCalculator.round2(dayRides.sumOf { it.grossFare + it.tips }),
                     totalNet = RideCalculator.round2(dayRides.sumOf { it.netIncome }),
                     lastSubmittedAt = dayRides.mapNotNull { it.financeSubmittedAt }.maxOrNull()
+                )
+            }
+    }
+
+    fun buildDailyCycleBreakdown(
+        rides: List<RideEntity>,
+        settings: AppSettingsEntity,
+        cycle: BillingCycle
+    ): List<DailySummaryItem> {
+        if (rides.isEmpty()) return emptyList()
+        return rides
+            .map { ride -> ride to RideCalculator.computeShiftDateIso(ride.rideDateMillis, settings) }
+            .filter { (_, shiftIso) -> shiftIso >= cycle.startDateIso && shiftIso <= cycle.endDateIso }
+            .groupBy { (_, shiftIso) -> shiftIso }
+            .entries
+            .sortedByDescending { it.key }
+            .map { (shiftIso, entries) ->
+                val dayRides = entries.map { it.first }
+                val platformRows = dayRides
+                    .groupBy { it.platformName.ifBlank { "Other" } }
+                    .entries
+                    .map { (platform, pRides) ->
+                        PlatformDaySummary(
+                            platformName = platform,
+                            rideCount = pRides.size,
+                            distanceKm = RideCalculator.round2(pRides.sumOf { it.distanceKm }),
+                            grossFare = RideCalculator.round2(pRides.sumOf { it.grossFare }),
+                            tips = RideCalculator.round2(pRides.sumOf { it.tips }),
+                            totalFuel = RideCalculator.round2(pRides.sumOf { it.fuelCost }),
+                            totalSalik = RideCalculator.round2(pRides.sumOf { it.salikCost }),
+                            totalCommission = RideCalculator.round2(pRides.sumOf { it.boltCommission }),
+                            totalBookingFee = RideCalculator.round2(pRides.sumOf { it.bookingFee }),
+                            netIncome = RideCalculator.round2(pRides.sumOf { it.netIncome })
+                        )
+                    }
+                    .sortedByDescending { it.netIncome }
+
+                DailySummaryItem(
+                    dateIso = shiftIso,
+                    summary = aggregateRides(dayRides),
+                    platformBreakdowns = platformRows
                 )
             }
     }

@@ -19,6 +19,18 @@ object RideCalculator {
 
     val PAYMENT_METHODS = listOf("Card", "Cash", "InAppPaid", "Account")
     val STANDARD_PAYMENT_METHODS = listOf("Card", "Cash", "InAppPaid")
+    val DEFAULT_PLATFORM_NAMES = listOf("Bolt", "DTC", "Uber", "DTC Event Booking")
+
+    fun normalizePlatformInput(name: String): String =
+        name.trim().replace(Regex("\\s+"), " ")
+
+    fun isDefaultPlatform(platformName: String): Boolean {
+        val normalized = normalizePlatformInput(platformName).lowercase(Locale.US)
+        return normalized == "bolt" ||
+            normalized == "dtc" ||
+            normalized == "uber" ||
+            normalized == "dtc event booking"
+    }
 
     fun round2(value: Double): Double {
         if (value.isNaN() || value.isInfinite()) return 0.0
@@ -59,6 +71,10 @@ object RideCalculator {
     fun showsSalikCost(platformName: String, pickupName: String = ""): Boolean =
         !isDtcEventBooking(platformName, pickupName) && !isUberPlatform(platformName)
 
+    fun showsTips(platformName: String, pickupName: String = ""): Boolean =
+        !isDtcEventBooking(platformName, pickupName) &&
+            (isBoltPlatform(platformName) || isDtcPlatform(platformName) || isUberPlatform(platformName))
+
     fun showsPickupPoint(platformName: String): Boolean =
         isBoltPlatform(platformName) || isDtcPlatform(platformName)
 
@@ -98,8 +114,9 @@ object RideCalculator {
         fuelCost: Double,
         salikCost: Double,
         boltCommission: Double,
-        bookingFee: Double
-    ): Double = round2(grossFare - fuelCost - salikCost - boltCommission - bookingFee)
+        bookingFee: Double,
+        tips: Double = 0.0
+    ): Double = round2(grossFare + max(0.0, tips) - fuelCost - salikCost - boltCommission - bookingFee)
 
     fun formatMoney(amount: Double, currencyCode: String): String {
         val nf = NumberFormat.getNumberInstance(Locale.US).apply {

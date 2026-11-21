@@ -1,25 +1,51 @@
 package com.example
 
+import android.Manifest
+import android.app.Application
+import android.app.NotificationManager
 import android.content.Context
+import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.local.SessionManager
+import com.example.data.local.entity.AppSettingsEntity
+import com.example.data.local.entity.DriverAccountEntity
 import com.example.data.repository.RideLedgerRepository
+import com.example.domain.BillingCycle
+import com.example.domain.FinanceUiState
+import com.example.ui.screens.SettingsScreen
+import com.example.ui.theme.RideLedgerTheme
+import com.example.ui.viewmodel.PeriodSummary
+import com.example.util.RideReminderScheduler
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class ExampleRobolectricTest {
+
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<ComponentActivity>()
 
     private lateinit var context: Context
     private lateinit var database: AppDatabase
@@ -216,7 +242,8 @@ class ExampleRobolectricTest {
             salikCost = 0.0,
             boltCommission = 0.0,
             bookingFee = 0.0,
-            netIncome = 80.5
+            netIncome = 95.5,
+            tips = 15.0
         )
         repository.saveRide(ride)
 
@@ -240,6 +267,7 @@ class ExampleRobolectricTest {
         assertTrue(imported.isSuccess)
         assertEquals(1, imported.getOrThrow().size)
         assertEquals("Uber", imported.getOrThrow().first().platformName)
+        assertEquals(15.0, imported.getOrThrow().first().tips, 0.001)
 
         // SessionManager persists setup & folder URI flags
         assertEquals(false, repository.storageSetupCompleted.first())
@@ -250,5 +278,208 @@ class ExampleRobolectricTest {
             "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
             repository.grantedFolderUri.first()
         )
+    }
+
+    @Test
+    fun `default platforms cannot be deleted, duplicates rejected case-insensitively, custom platforms work`() = runTest {
+        repository.registerDriver("5544332", "123456")
+
+        val initialPlatforms = repository.platforms.first()
+        val initialNames = initialPlatforms.map { it.name }.toSet()
+        assertEquals(setOf("Bolt", "DTC", "Uber", "DTC Event Booking"), initialNames)
+
+        // Default platforms cannot be deleted
+        for (defaultPlatform in initialPlatforms) {
+            val delRes = repository.deletePlatform(defaultPlatform)
+            assertTrue("Expected failure deleting ${defaultPlatform.name}", delRes.isFailure)
+        }
+        assertEquals(4, repository.platforms.first().size)
+
+        // Duplicates of default platforms (any case or spacing) are rejected
+        assertTrue(repository.addPlatform("BOLT").isFailure)
+        assertTrue(repository.addPlatform("dtc").isFailure)
+        assertTrue(repository.addPlatform("uber").isFailure)
+        assertTrue(repository.addPlatform("  dtc   event   booking ").isFailure)
+
+        // Adding a custom platform with a different name succeeds
+        assertTrue(repository.addPlatform("Yango").isSuccess)
+        // Duplicate of custom platform is also rejected
+        assertTrue(repository.addPlatform("yango").isFailure)
+
+        val afterAdd = repository.platforms.first()
+        assertEquals(5, afterAdd.size)
+        val yango = afterAdd.first { it.name == "Yango" }
+
+        // Custom platform CAN be deleted
+        val delCustom = repository.deletePlatform(yango)
+        assertTrue(delCustom.isSuccess)
+        assertEquals(4, repository.platforms.first().size)
+    }
+
+    @Test
+    fun `pre-existing duplicate Bolt and BOLT rows are deduplicated to single Bolt`() = runTest {
+        val dao = database.settingsDao()
+        dao.insertPlatform(com.example.data.local.entity.PlatformEntity(name = "Bolt"))
+        dao.insertPlatform(com.example.data.local.entity.PlatformEntity(name = "BOLT"))
+        dao.insertPlatform(com.example.data.local.entity.PlatformEntity(name = "uber"))
+
+        repository.ensureDefaultsPopulated()
+
+        val cleaned = repository.platforms.first()
+        val boltMatches = cleaned.filter { it.name.equals("bolt", ignoreCase = true) }
+        assertEquals(1, boltMatches.size)
+        assertEquals("Bolt", boltMatches.first().name)
+
+        val uberMatches = cleaned.filter { it.name.equals("uber", ignoreCase = true) }
+        assertEquals(1, uberMatches.size)
+        assertEquals("Uber", uberMatches.first().name)
+        assertEquals(setOf("Bolt", "DTC", "Uber", "DTC Event Booking"), cleaned.map { it.name }.toSet())
+    }
+
+    @Test
+    fun `daily reminder toggle and dismissed in-app slot persist in session datastore`() = runTest {
+        assertTrue(repository.remindersEnabled.first())
+        repository.setRemindersEnabled(false)
+        assertEquals(false, repository.remindersEnabled.first())
+
+        repository.setRemindersEnabled(true)
+        assertEquals(true, repository.remindersEnabled.first())
+
+        repository.setDismissedReminderSlot("2026-11-18_16")
+        assertEquals("2026-11-18_16", repository.dismissedReminderSlot.first())
+
+        repository.setDismissedFinanceReminderSlot("2026-11-18_16_fin")
+        assertEquals("2026-11-18_16_fin", repository.dismissedFinanceReminderSlot.first())
+
+        repository.registerDriver("3322110", "123456")
+        repository.saveRide(
+            com.example.data.local.entity.RideEntity(
+                driverId = "3322110",
+                rideDateMillis = System.currentTimeMillis(),
+                rideDateIso = "2026-11-18",
+                platformName = "Bolt",
+                pickupPointName = "Street Hail",
+                paymentMethod = "Cash",
+                distanceKm = 10.0,
+                grossFare = 75.0,
+                fuelCostPerKmApplied = 0.45,
+                fuelCost = 4.5,
+                salikCost = 0.0,
+                boltCommission = 7.5,
+                bookingFee = 0.0,
+                netIncome = 63.0,
+                isSubmittedToFinance = false
+            )
+        )
+        val pending = repository.getPendingFinanceSummaryForActiveDriver()
+        assertEquals(75.0, pending?.second?.cashOnHandGross ?: 0.0, 0.001)
+        assertEquals(1, pending?.second?.allPendingRideIds?.size)
+    }
+
+    @Test
+    fun `notification allow and test alerts work without crashing whether permission denied or granted`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val shadowApp = Shadows.shadowOf(app)
+
+        // 1. Permission denied: scheduler returns false cleanly without throwing
+        shadowApp.denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(RideReminderScheduler.showRideReminderNotification(context, isEveningSlot = true, isTest = true))
+        assertFalse(
+            RideReminderScheduler.showFinanceReminderNotification(
+                context = context,
+                isEveningSlot = true,
+                pendingShiftCount = 2,
+                totalDueText = "AED 120.00",
+                cashText = "AED 80.00",
+                otherDueText = "AED 40.00",
+                isTest = true
+            )
+        )
+
+        // 2. Permission granted: notifications post cleanly to NotificationManager
+        shadowApp.grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertTrue(RideReminderScheduler.showRideReminderNotification(context, isEveningSlot = true, isTest = true))
+        assertTrue(
+            RideReminderScheduler.showFinanceReminderNotification(
+                context = context,
+                isEveningSlot = false,
+                pendingShiftCount = 1,
+                totalDueText = "AED 50.00",
+                cashText = "AED 50.00",
+                otherDueText = "AED 0.00",
+                isTest = true
+            )
+        )
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val postedCount = Shadows.shadowOf(notificationManager).allNotifications.size
+        assertTrue(postedCount >= 2)
+    }
+
+    @Test
+    fun `settings screen notification controls handle clicks safely without crashing`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        Shadows.shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val messages = mutableListOf<String>()
+
+        composeTestRule.setContent {
+            RideLedgerTheme {
+                SettingsScreen(
+                    driver = DriverAccountEntity("1234567", "hash", "Driver Test", "0501234567"),
+                    appSettings = AppSettingsEntity(),
+                    platforms = emptyList(),
+                    pickupPoints = emptyList(),
+                    isBiometricAvailable = false,
+                    isBiometricEnabled = false,
+                    onToggleBiometric = {},
+                    remindersEnabled = true,
+                    onSetRemindersEnabled = {},
+                    financeState = FinanceUiState(),
+                    onUpdateProfile = { _, _ -> },
+                    onChangePassword = { _, _, _ -> },
+                    onUpdateFuelAndCurrency = { _, _ -> },
+                    onUpdateShiftTiming = { _, _, _, _ -> },
+                    onAddPlatform = {},
+                    onDeletePlatform = {},
+                    onAddPickupPoint = { _, _, _ -> },
+                    onUpdatePickupPoint = { _, _, _, _ -> },
+                    onDeletePickupPoint = {},
+                    settingsCycle = BillingCycle("2026-10-21", "2026-11-20", "Nov 2026"),
+                    settingsCycleSummary = PeriodSummary(),
+                    settingsCycleGroups = emptyList(),
+                    onShiftSettingsCycle = {},
+                    onDeleteCycleData = {},
+                    grantedFolderUri = null,
+                    onFolderPermissionGranted = {},
+                    onImportExcel = {},
+                    onExportCompleted = { _, _ -> },
+                    onUiMessage = { messages.add(it) },
+                    onLogout = {}
+                )
+            }
+        }
+
+        val listNode = composeTestRule.onNode(hasScrollToIndexAction())
+        listNode.performScrollToNode(hasTestTag("settings_allow_notifications_button"))
+        composeTestRule.onNodeWithTag("settings_allow_notifications_button").performClick()
+
+        listNode.performScrollToNode(hasTestTag("settings_system_notifications_button"))
+        composeTestRule.onNodeWithTag("settings_system_notifications_button").performClick()
+
+        listNode.performScrollToNode(hasTestTag("settings_reminders_switch"))
+        composeTestRule.onNodeWithTag("settings_reminders_switch").performClick()
+
+        // Test notification buttons were removed
+        composeTestRule.onNodeWithTag("settings_test_reminder_button").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("settings_test_finance_reminder_button").assertDoesNotExist()
+
+        // About section displays title, App Version 1.0.1, description, and developer/copyright details
+        assertEquals("1.0.1", BuildConfig.VERSION_NAME)
+        listNode.performScrollToNode(hasTestTag("settings_about_section"))
+        composeTestRule.onNodeWithTag("settings_about_section").assertIsDisplayed()
+        composeTestRule.onNodeWithText("About").assertIsDisplayed()
+        composeTestRule.onNodeWithText("App Version 1.0.1").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Developed by Fakhrul Islam").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Email: fibron85@gmail.com").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Mobile: +971558895749").assertIsDisplayed()
     }
 }

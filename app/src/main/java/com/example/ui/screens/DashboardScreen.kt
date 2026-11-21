@@ -1,10 +1,15 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,8 +31,10 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CalendarViewDay
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.LocalGasStation
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
@@ -44,6 +51,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,16 +65,24 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.local.entity.DriverAccountEntity
 import com.example.data.local.entity.RideEntity
 import com.example.domain.FinanceUiState
 import com.example.domain.RideCalculator
+import com.example.ui.components.PaymentMethodSymbolBadge
+import com.example.ui.components.PlatformPillBadge
+import com.example.ui.components.TipPillBadge
+import com.example.ui.components.sleekCardBorder
 import com.example.ui.theme.Amber500
 import com.example.ui.theme.Emerald500
 import com.example.ui.theme.Sky500
@@ -74,6 +90,8 @@ import com.example.ui.viewmodel.DailyChartPoint
 import com.example.ui.viewmodel.DashboardUiState
 import com.example.ui.viewmodel.PeriodSummary
 import com.example.ui.viewmodel.PlatformSummary
+import com.example.util.InAppReminderPrompt
+import com.example.util.RideReminderScheduler
 
 @Composable
 fun DashboardScreen(
@@ -82,13 +100,46 @@ fun DashboardScreen(
     financeState: FinanceUiState,
     currencyCode: String,
     fuelRatePerKm: Double,
+    remindersEnabled: Boolean,
+    activeInAppReminder: InAppReminderPrompt?,
+    activeFinanceInAppReminder: InAppReminderPrompt?,
+    onDismissInAppReminder: (String) -> Unit,
+    onDismissFinanceInAppReminder: (String) -> Unit,
     onAddRideClick: () -> Unit,
     onViewReportsClick: () -> Unit,
+    onOpenDailySummaryClick: () -> Unit,
     onOpenFinanceClick: () -> Unit,
     onLogoutClick: () -> Unit,
+    onUiMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var hasNotificationPermission by remember {
+        mutableStateOf(RideReminderScheduler.hasNotificationPermission(context))
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasNotificationPermission = RideReminderScheduler.hasNotificationPermission(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotificationPermission = granted || RideReminderScheduler.hasNotificationPermission(context)
+        if (granted) {
+            RideReminderScheduler.scheduleDailyReminders(context)
+        } else {
+            onUiMessage("Enable notifications in Android Settings to receive 4:00 PM & 4:00 AM alerts.")
+        }
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -191,41 +242,240 @@ fun DashboardScreen(
 
         // Daily & Monthly Core Summaries
         item {
-            Column(
+            BoxWithConstraints(
                 modifier = Modifier
-                    .widthIn(max = 760.dp)
+                    .widthIn(max = 920.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Daily Shift Summary Card
-                IncomeHeroCard(
-                    title = "Daily Shift Income",
-                    subtitle = "${dashboardState.todaySummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.todaySummary.totalDistanceKm)} km • Shift ${dashboardState.shiftWindowLabel}",
-                    icon = Icons.Default.Today,
-                    summary = dashboardState.todaySummary,
-                    currencyCode = currencyCode,
-                    accentColor = MaterialTheme.colorScheme.primary,
-                    testTag = "daily_summary_card"
-                )
-
-                // Monthly Summary Card (Day 21 to Day 20)
-                IncomeHeroCard(
-                    title = "Monthly Income (${dashboardState.currentBillingCycle.label})",
-                    subtitle = "${dashboardState.monthSummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.monthSummary.totalDistanceKm)} km • 21st–20th cycle",
-                    icon = Icons.Default.CalendarMonth,
-                    summary = dashboardState.monthSummary,
-                    currencyCode = currencyCode,
-                    accentColor = Sky500,
-                    testTag = "monthly_summary_card"
-                )
-
-                // Active Fuel Rate & Shift Window Chip Strip
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth()
+                val twoColHero = maxWidth >= 680.dp
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
+                    if (activeInAppReminder != null) {
+                        Card(
+                            shape = MaterialTheme.shapes.medium,
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                            ),
+                            border = sleekCardBorder(0.75f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dashboard_in_app_reminder_card")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.NotificationsActive,
+                                        contentDescription = "Ride reminder",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = activeInAppReminder.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Text(
+                                    text = activeInAppReminder.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                                ) {
+                                    TextButton(
+                                        onClick = { onDismissInAppReminder(activeInAppReminder.slotKey) },
+                                        modifier = Modifier.testTag("dashboard_dismiss_reminder_button")
+                                    ) {
+                                        Text("Dismiss")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            onDismissInAppReminder(activeInAppReminder.slotKey)
+                                            onAddRideClick()
+                                        },
+                                        modifier = Modifier.testTag("dashboard_reminder_add_ride_button")
+                                    ) {
+                                        Text("Log Ride")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (activeFinanceInAppReminder != null) {
+                        Card(
+                            shape = MaterialTheme.shapes.medium,
+                            colors = CardDefaults.cardColors(
+                                containerColor = Amber500.copy(alpha = 0.14f)
+                            ),
+                            border = sleekCardBorder(0.75f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dashboard_finance_reminder_card")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.AccountBalanceWallet,
+                                        contentDescription = "Finance payment reminder",
+                                        tint = Amber500,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = activeFinanceInAppReminder.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Text(
+                                    text = activeFinanceInAppReminder.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                                ) {
+                                    TextButton(
+                                        onClick = { onDismissFinanceInAppReminder(activeFinanceInAppReminder.slotKey) },
+                                        modifier = Modifier.testTag("dashboard_dismiss_finance_reminder_button")
+                                    ) {
+                                        Text("Dismiss")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            onDismissFinanceInAppReminder(activeFinanceInAppReminder.slotKey)
+                                            onOpenFinanceClick()
+                                        },
+                                        modifier = Modifier.testTag("dashboard_reminder_open_finance_button")
+                                    ) {
+                                        Text("Submit Finance")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (remindersEnabled && !hasNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        Card(
+                            shape = MaterialTheme.shapes.medium,
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            border = sleekCardBorder(0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.NotificationsActive,
+                                        contentDescription = null,
+                                        tint = Amber500,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Allow notifications for daily 4:00 PM & 4:00 AM ride reminders",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                FilledTonalButton(
+                                    onClick = {
+                                        runCatching {
+                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        }.onFailure {
+                                            if (!RideReminderScheduler.openAppNotificationSettings(context)) {
+                                                onUiMessage("Open Android Settings → Apps → RideLedger → Notifications.")
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("dashboard_allow_notifications_button")
+                                ) {
+                                    Text("Allow")
+                                }
+                            }
+                        }
+                    }
+
+                    if (twoColHero) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            IncomeHeroCard(
+                                title = "Daily Shift Income",
+                                subtitle = "${dashboardState.todaySummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.todaySummary.totalDistanceKm)} km • ${dashboardState.shiftWindowLabel}",
+                                icon = Icons.Default.Today,
+                                summary = dashboardState.todaySummary,
+                                currencyCode = currencyCode,
+                                accentColor = MaterialTheme.colorScheme.primary,
+                                testTag = "daily_summary_card",
+                                modifier = Modifier.weight(1f)
+                            )
+                            IncomeHeroCard(
+                                title = "Monthly (${dashboardState.currentBillingCycle.label})",
+                                subtitle = "${dashboardState.monthSummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.monthSummary.totalDistanceKm)} km • 21st–20th",
+                                icon = Icons.Default.CalendarMonth,
+                                summary = dashboardState.monthSummary,
+                                currencyCode = currencyCode,
+                                accentColor = Sky500,
+                                testTag = "monthly_summary_card",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    } else {
+                        IncomeHeroCard(
+                            title = "Daily Shift Income",
+                            subtitle = "${dashboardState.todaySummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.todaySummary.totalDistanceKm)} km • Shift ${dashboardState.shiftWindowLabel}",
+                            icon = Icons.Default.Today,
+                            summary = dashboardState.todaySummary,
+                            currencyCode = currencyCode,
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            testTag = "daily_summary_card"
+                        )
+                        IncomeHeroCard(
+                            title = "Monthly Income (${dashboardState.currentBillingCycle.label})",
+                            subtitle = "${dashboardState.monthSummary.rideCount} rides • ${RideCalculator.formatDecimal(dashboardState.monthSummary.totalDistanceKm)} km • 21st–20th cycle",
+                            icon = Icons.Default.CalendarMonth,
+                            summary = dashboardState.monthSummary,
+                            currencyCode = currencyCode,
+                            accentColor = Sky500,
+                            testTag = "monthly_summary_card"
+                        )
+                    }
+
+                    // Active Fuel Rate & Shift Window Chip Strip
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = sleekCardBorder(0.45f),
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -289,7 +539,8 @@ fun DashboardScreen(
                 Card(
                     shape = MaterialTheme.shapes.medium,
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    border = sleekCardBorder(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -326,6 +577,54 @@ fun DashboardScreen(
                             modifier = Modifier.testTag("dashboard_open_finance_button")
                         ) {
                             Text("Finance")
+                        }
+                    }
+                }
+
+                // Daily Summary Quick Strip
+                Card(
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = sleekCardBorder(),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarViewDay,
+                                    contentDescription = null,
+                                    tint = Sky500,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Daily Summary",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Text(
+                                text = "Day-wise income & separate platform breakdown (${dashboardState.currentBillingCycle.label})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FilledTonalButton(
+                            onClick = onOpenDailySummaryClick,
+                            modifier = Modifier.testTag("dashboard_daily_summary_button")
+                        ) {
+                            Text("Summary")
                         }
                     }
                 }
@@ -369,6 +668,7 @@ fun DashboardScreen(
                         Text("Reports & Export")
                     }
                 }
+            }
             }
         }
 
@@ -458,29 +758,31 @@ private fun IncomeHeroCard(
     summary: PeriodSummary,
     currencyCode: String,
     accentColor: Color,
-    testTag: String
+    testTag: String,
+    modifier: Modifier = Modifier
 ) {
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = Modifier
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = modifier
             .fillMaxWidth()
             .testTag(testTag)
     ) {
         Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
                             .background(accentColor.copy(alpha = 0.14f)),
                         contentAlignment = Alignment.Center
@@ -489,16 +791,23 @@ private fun IncomeHeroCard(
                             imageVector = icon,
                             contentDescription = null,
                             tint = accentColor,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(text = title, style = MaterialTheme.typography.titleMedium)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         Text(
                             text = subtitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -506,45 +815,58 @@ private fun IncomeHeroCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = sleekCardBorder(0.4f),
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "TOTAL INCOME",
+                            text = if (summary.totalTips > 0.0) "FARE (+TIPS)" else "TOTAL FARE",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = RideCalculator.formatMoney(summary.grossIncome, currencyCode),
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (summary.totalTips > 0.0) {
+                            Text(
+                                text = "+${RideCalculator.formatMoney(summary.totalTips, currencyCode)} tips",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Emerald500,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                    border = sleekCardBorder(0.6f),
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         Text(
                             text = "NET INCOME",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = RideCalculator.formatMoney(summary.netIncome, currencyCode),
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
                             maxLines = 1,
@@ -593,12 +915,14 @@ private fun IncomeHeroCard(
                         Text(
                             text = "Fuel: ${RideCalculator.formatMoney(summary.totalFuel, currencyCode)}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                         Text(
-                            text = "Salik/Fees/Comm: ${RideCalculator.formatMoney(summary.totalSalik + summary.totalCommission + summary.totalBookingFee, currencyCode)}",
+                            text = "Fees/Comm: ${RideCalculator.formatMoney(summary.totalSalik + summary.totalCommission + summary.totalBookingFee, currencyCode)}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
                 }
@@ -617,7 +941,8 @@ private fun MonthlyTrendChartCard(
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -724,11 +1049,12 @@ private fun PlatformBreakdownCard(
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(18.dp),
+            modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text("Cycle Breakdown by Platform", style = MaterialTheme.typography.titleMedium)
@@ -744,7 +1070,11 @@ private fun PlatformBreakdownCard(
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
-                        val platformFareLabel = if (RideCalculator.usesYourEarningLabel(item.platformName)) "Your Earning" else "Gross"
+                        val platformFareLabel = when {
+                            RideCalculator.isDtcEventBookingPlatform(item.platformName) -> "Full Fare"
+                            RideCalculator.usesYourEarningLabel(item.platformName) -> "Your Earning"
+                            else -> "Fare"
+                        }
                         Text(
                             text = "${item.rideCount} rides • $platformFareLabel ${RideCalculator.formatMoney(item.grossIncome, currencyCode)}",
                             style = MaterialTheme.typography.bodySmall,
@@ -771,50 +1101,42 @@ fun RideSummaryRowCard(
     Card(
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = sleekCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = ride.platformName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PlatformPillBadge(platformName = ride.platformName)
                     if (ride.pickupPointName.isNotBlank()) {
                         Text(
                             text = ride.pickupPointName,
                             style = MaterialTheme.typography.titleSmall,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = ride.paymentMethod.ifBlank { "Cash" },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                    PaymentMethodSymbolBadge(paymentMethod = ride.paymentMethod)
+                    if (ride.tips > 0.0) {
+                        TipPillBadge(amountText = RideCalculator.formatDecimal(ride.tips))
                     }
                 }
-                val farePrefix = if (RideCalculator.usesYourEarningLabel(ride.platformName)) "Your Earning" else "Gross"
+                val farePrefix = when {
+                    RideCalculator.isDtcEventBookingPlatform(ride.platformName) -> "Full Fare"
+                    RideCalculator.usesYourEarningLabel(ride.platformName) -> "Your Earning"
+                    else -> "Fare"
+                }
                 Text(
                     text = if (ride.distanceKm > 0.0) {
                         "${RideCalculator.toTimeLabel(ride.rideDateMillis)} • ${RideCalculator.formatDecimal(ride.distanceKm)} km • $farePrefix ${RideCalculator.formatMoney(ride.grossFare, currencyCode)}"
@@ -822,7 +1144,9 @@ fun RideSummaryRowCard(
                         "${RideCalculator.toTimeLabel(ride.rideDateMillis)} • $farePrefix ${RideCalculator.formatMoney(ride.grossFare, currencyCode)}"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))
@@ -831,7 +1155,8 @@ fun RideSummaryRowCard(
                     text = RideCalculator.formatMoney(ride.netIncome, currencyCode),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = if (ride.netIncome >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    color = if (ride.netIncome >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    maxLines = 1
                 )
                 Text(
                     text = "Net",

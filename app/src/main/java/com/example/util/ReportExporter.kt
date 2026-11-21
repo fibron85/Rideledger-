@@ -143,7 +143,7 @@ object ReportExporter {
             canvas.drawText("Period Totals (${settings.currencyCode})", margin, y, sectionPaint)
             y += 16f
             val summaryLines = listOf(
-                "Rides: ${summary.rideCount}   |   Hired Distance: ${RideCalculator.formatDecimal(summary.totalDistanceKm)} km   |   Gross Fare: ${RideCalculator.formatMoney(summary.grossIncome, settings.currencyCode)}",
+                "Rides: ${summary.rideCount}   |   Distance: ${RideCalculator.formatDecimal(summary.totalDistanceKm)} km   |   Fare: ${RideCalculator.formatMoney(summary.grossIncome, settings.currencyCode)}   |   Tips: ${RideCalculator.formatMoney(summary.totalTips, settings.currencyCode)}",
                 "Fuel: ${RideCalculator.formatMoney(summary.totalFuel, settings.currencyCode)}   |   Salik: ${RideCalculator.formatMoney(summary.totalSalik, settings.currencyCode)}   |   Commission: ${RideCalculator.formatMoney(summary.totalCommission, settings.currencyCode)}   |   Booking: ${RideCalculator.formatMoney(summary.totalBookingFee, settings.currencyCode)}",
                 "NET INCOME: ${RideCalculator.formatMoney(summary.netIncome, settings.currencyCode)}"
             )
@@ -327,7 +327,8 @@ object ReportExporter {
                 XlsxCell.Str("Shift Date", 1),
                 XlsxCell.Str("Rides", 1),
                 XlsxCell.Str("Distance (km)", 1),
-                XlsxCell.Str("Gross Fare", 1),
+                XlsxCell.Str("Fare", 1),
+                XlsxCell.Str("Tips", 1),
                 XlsxCell.Str("Fuel Cost", 1),
                 XlsxCell.Str("Salik Cost", 1),
                 XlsxCell.Str("Bolt Commission", 1),
@@ -344,6 +345,7 @@ object ReportExporter {
                     XlsxCell.Num(s.rideCount.toDouble()),
                     XlsxCell.Num(s.totalDistanceKm),
                     XlsxCell.Num(s.grossIncome),
+                    XlsxCell.Num(s.totalTips),
                     XlsxCell.Num(s.totalFuel),
                     XlsxCell.Num(s.totalSalik),
                     XlsxCell.Num(s.totalCommission),
@@ -359,6 +361,7 @@ object ReportExporter {
                 XlsxCell.Num(summary.rideCount.toDouble(), 1),
                 XlsxCell.Num(summary.totalDistanceKm, 1),
                 XlsxCell.Num(summary.grossIncome, 1),
+                XlsxCell.Num(summary.totalTips, 1),
                 XlsxCell.Num(summary.totalFuel, 1),
                 XlsxCell.Num(summary.totalSalik, 1),
                 XlsxCell.Num(summary.totalCommission, 1),
@@ -383,7 +386,7 @@ object ReportExporter {
                 XlsxCell.Str("Pickup Point", 1),
                 XlsxCell.Str("Payment Method", 1),
                 XlsxCell.Str("Distance (km)", 1),
-                XlsxCell.Str("Gross Fare (${settings.currencyCode})", 1),
+                XlsxCell.Str("Fare (${settings.currencyCode})", 1),
                 XlsxCell.Str("Fuel Cost", 1),
                 XlsxCell.Str("Salik Cost", 1),
                 XlsxCell.Str("Bolt Commission", 1),
@@ -391,7 +394,8 @@ object ReportExporter {
                 XlsxCell.Str("Net Income", 1),
                 XlsxCell.Str("Notes", 1),
                 XlsxCell.Str("Finance Status", 1),
-                XlsxCell.Str("Finance Submitted At", 1)
+                XlsxCell.Str("Finance Submitted At", 1),
+                XlsxCell.Str("Tips (${settings.currencyCode})", 1)
             )
         )
 
@@ -414,7 +418,8 @@ object ReportExporter {
                         XlsxCell.Num(ride.netIncome),
                         XlsxCell.Str(ride.notes),
                         XlsxCell.Str(if (ride.isSubmittedToFinance) "Submitted" else "Pending"),
-                        XlsxCell.Num((ride.financeSubmittedAt ?: 0L).toDouble())
+                        XlsxCell.Num((ride.financeSubmittedAt ?: 0L).toDouble()),
+                        XlsxCell.Num(ride.tips)
                     )
                 )
             }
@@ -510,9 +515,17 @@ object ReportExporter {
             val salikCost = RideCalculator.round2((cells[9]?.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0))
             val boltCommission = RideCalculator.round2((cells[10]?.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0))
             val bookingFee = RideCalculator.round2((cells[11]?.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0))
+            val tips = RideCalculator.round2((cells[16]?.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0))
             val netIncome = RideCalculator.round2(
                 cells[12]?.toDoubleOrNull()
-                    ?: RideCalculator.calculateNetIncome(grossFare, fuelCost, salikCost, boltCommission, bookingFee)
+                    ?: RideCalculator.calculateNetIncome(
+                        grossFare = grossFare,
+                        fuelCost = fuelCost,
+                        salikCost = salikCost,
+                        boltCommission = boltCommission,
+                        bookingFee = bookingFee,
+                        tips = tips
+                    )
             )
             val notes = cells[13]?.trim().orEmpty()
             val financeStatusRaw = cells[14]?.trim().orEmpty()
@@ -544,6 +557,7 @@ object ReportExporter {
                     boltCommission = boltCommission,
                     bookingFee = bookingFee,
                     netIncome = netIncome,
+                    tips = tips,
                     notes = notes,
                     isSubmittedToFinance = isSubmittedToFinance,
                     financeSubmittedAt = financeSubmittedAt

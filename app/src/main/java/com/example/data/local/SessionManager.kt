@@ -18,6 +18,9 @@ class SessionManager(private val context: Context) {
     private val biometricDriverIdKey = stringPreferencesKey("biometric_driver_id")
     private val storageSetupCompletedKey = booleanPreferencesKey("storage_setup_completed")
     private val grantedFolderUriKey = stringPreferencesKey("granted_folder_uri")
+    private val remindersEnabledKey = booleanPreferencesKey("daily_reminders_enabled")
+    private val dismissedReminderSlotKey = stringPreferencesKey("dismissed_reminder_slot_key")
+    private val dismissedFinanceReminderSlotKey = stringPreferencesKey("dismissed_finance_reminder_slot_key")
 
     val activeDriverId: Flow<String?> = context.sessionDataStore.data.map { prefs ->
         prefs[activeDriverIdKey]
@@ -33,6 +36,18 @@ class SessionManager(private val context: Context) {
 
     val grantedFolderUri: Flow<String?> = context.sessionDataStore.data.map { prefs ->
         prefs[grantedFolderUriKey]
+    }
+
+    val remindersEnabled: Flow<Boolean> = context.sessionDataStore.data.map { prefs ->
+        prefs[remindersEnabledKey] ?: true
+    }
+
+    val dismissedReminderSlot: Flow<String?> = context.sessionDataStore.data.map { prefs ->
+        prefs[dismissedReminderSlotKey]
+    }
+
+    val dismissedFinanceReminderSlot: Flow<String?> = context.sessionDataStore.data.map { prefs ->
+        prefs[dismissedFinanceReminderSlotKey]
     }
 
     suspend fun setActiveDriverId(driverId: String) {
@@ -63,6 +78,32 @@ class SessionManager(private val context: Context) {
                 prefs.remove(grantedFolderUriKey)
             } else {
                 prefs[grantedFolderUriKey] = uriString
+            }
+        }
+    }
+
+    suspend fun setRemindersEnabled(enabled: Boolean) {
+        context.sessionDataStore.edit { prefs ->
+            prefs[remindersEnabledKey] = enabled
+        }
+    }
+
+    suspend fun setDismissedReminderSlot(slotKey: String?) {
+        context.sessionDataStore.edit { prefs ->
+            if (slotKey.isNullOrBlank()) {
+                prefs.remove(dismissedReminderSlotKey)
+            } else {
+                prefs[dismissedReminderSlotKey] = slotKey
+            }
+        }
+    }
+
+    suspend fun setDismissedFinanceReminderSlot(slotKey: String?) {
+        context.sessionDataStore.edit { prefs ->
+            if (slotKey.isNullOrBlank()) {
+                prefs.remove(dismissedFinanceReminderSlotKey)
+            } else {
+                prefs[dismissedFinanceReminderSlotKey] = slotKey
             }
         }
     }

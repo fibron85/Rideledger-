@@ -27,6 +27,7 @@ data class RideEntity(
     val boltCommission: Double,
     val bookingFee: Double,
     val netIncome: Double,
+    val tips: Double = 0.0,
     val notes: String = "",
     val isSubmittedToFinance: Boolean = false,
     val financeSubmittedAt: Long? = null,

@@ -99,10 +99,17 @@ class ExampleUnitTest {
         assertTrue(RideCalculator.showsSalikCost("Bolt"))
         assertTrue(RideCalculator.showsSalikCost("DTC"))
         assertTrue(RideCalculator.showsSalikCost("Careem"))
+
+        // Tips supported for Bolt, DTC, Uber; hidden for Careem & DTC Event Booking
+        assertTrue(RideCalculator.showsTips("Bolt"))
+        assertTrue(RideCalculator.showsTips("DTC"))
+        assertTrue(RideCalculator.showsTips("Uber"))
+        assertFalse(RideCalculator.showsTips("Careem"))
+        assertFalse(RideCalculator.showsTips("DTC Event Booking"))
     }
 
     @Test
-    fun `fuel cost and net income calculation is accurate`() {
+    fun `fuel cost and net income calculation is accurate with and without tips`() {
         val fuel = RideCalculator.calculateFuelCost(distanceKm = 20.5, fuelCostPerKm = 0.45)
         assertEquals(9.23, fuel, 0.001)
 
@@ -114,6 +121,16 @@ class ExampleUnitTest {
             bookingFee = 5.0
         )
         assertEquals(82.77, net, 0.001)
+
+        val netWithTips = RideCalculator.calculateNetIncome(
+            grossFare = 120.0,
+            fuelCost = fuel,
+            salikCost = 8.0,
+            boltCommission = 15.0,
+            bookingFee = 5.0,
+            tips = 12.5
+        )
+        assertEquals(95.27, netWithTips, 0.001)
     }
 
     @Test
@@ -252,7 +269,8 @@ class ExampleUnitTest {
             id = 1, driverId = "1234567", rideDateMillis = ts1, rideDateIso = "2026-11-12",
             platformName = "Uber", pickupPointName = "", paymentMethod = "Cash",
             distanceKm = 14.5, grossFare = 92.0, fuelCostPerKmApplied = 0.45,
-            fuelCost = 6.53, salikCost = 0.0, boltCommission = 0.0, bookingFee = 0.0, netIncome = 85.47,
+            fuelCost = 6.53, salikCost = 0.0, boltCommission = 0.0, bookingFee = 0.0,
+            netIncome = 95.47, tips = 10.0,
             notes = "Airport drop", isSubmittedToFinance = false
         )
         val eventRide = RideEntity(
@@ -267,11 +285,11 @@ class ExampleUnitTest {
             driver = DriverAccountEntity("1234567", "hash", "Tariq", "0501234567"),
             settings = settings,
             periodLabel = "21 Oct – 20 Nov 2026",
-            summary = PeriodSummary(442.0, 435.47, 6.53, 0.0, 0.0, 0.0, 14.5, 2),
+            summary = PeriodSummary(442.0, 445.47, 6.53, 0.0, 0.0, 0.0, 14.5, 2, 10.0),
             dailyGroups = listOf(
                 DailyReportGroup(
                     dateIso = "2026-11-12",
-                    summary = PeriodSummary(442.0, 435.47, 6.53, 0.0, 0.0, 0.0, 14.5, 2),
+                    summary = PeriodSummary(442.0, 445.47, 6.53, 0.0, 0.0, 0.0, 14.5, 2, 10.0),
                     rides = listOf(uberRide, eventRide)
                 )
             )
@@ -284,7 +302,8 @@ class ExampleUnitTest {
         assertEquals("Uber", parsedUber.platformName)
         assertEquals("Cash", parsedUber.paymentMethod)
         assertEquals(92.0, parsedUber.grossFare, 0.001)
-        assertEquals(85.47, parsedUber.netIncome, 0.001)
+        assertEquals(10.0, parsedUber.tips, 0.001)
+        assertEquals(95.47, parsedUber.netIncome, 0.001)
         assertEquals("Airport drop", parsedUber.notes)
         assertFalse(parsedUber.isSubmittedToFinance)
 
@@ -292,8 +311,168 @@ class ExampleUnitTest {
         assertEquals("DTC Event Booking", parsedEvent.platformName)
         assertEquals("Account", parsedEvent.paymentMethod)
         assertEquals(350.0, parsedEvent.grossFare, 0.001)
+        assertEquals(0.0, parsedEvent.tips, 0.001)
         assertEquals(350.0, parsedEvent.netIncome, 0.001)
         assertEquals("Exhibition shuttle", parsedEvent.notes)
         assertTrue(parsedEvent.isSubmittedToFinance)
+    }
+
+    @Test
+    fun `daily cycle breakdown groups rides by shift day and platform separately`() {
+        val settings = AppSettingsEntity(
+            shiftStartHour = 18,
+            shiftStartMinute = 0,
+            shiftEndHour = 6,
+            shiftEndMinute = 0
+        )
+        val cycle = RideCalculator.getBillingCycleForDate("2026-11-17") // 2026-10-21 .. 2026-11-20
+
+        val boltEvening = RideEntity(
+            id = 1, driverId = "1234567",
+            rideDateMillis = Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 17, 20, 0, 0) }.timeInMillis,
+            rideDateIso = "2026-11-17",
+            platformName = "Bolt", pickupPointName = "Street Hail", paymentMethod = "Cash",
+            distanceKm = 12.0, grossFare = 90.0, fuelCostPerKmApplied = 0.45,
+            fuelCost = 5.4, salikCost = 4.0, boltCommission = 10.0, bookingFee = 0.0,
+            netIncome = 75.6, tips = 5.0
+        )
+        val uberLateNightSameShift = RideEntity(
+            id = 2, driverId = "1234567",
+            rideDateMillis = Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 18, 1, 30, 0) }.timeInMillis,
+            rideDateIso = "2026-11-18",
+            platformName = "Uber", pickupPointName = "", paymentMethod = "Card",
+            distanceKm = 20.0, grossFare = 140.0, fuelCostPerKmApplied = 0.45,
+            fuelCost = 9.0, salikCost = 0.0, boltCommission = 0.0, bookingFee = 0.0,
+            netIncome = 141.0, tips = 10.0
+        )
+        val dtcEventEarlierDay = RideEntity(
+            id = 3, driverId = "1234567",
+            rideDateMillis = Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 15, 22, 0, 0) }.timeInMillis,
+            rideDateIso = "2026-11-15",
+            platformName = "DTC Event Booking", pickupPointName = "", paymentMethod = "Account",
+            distanceKm = 0.0, grossFare = 300.0, fuelCostPerKmApplied = 0.0,
+            fuelCost = 0.0, salikCost = 0.0, boltCommission = 0.0, bookingFee = 0.0,
+            netIncome = 300.0, tips = 0.0
+        )
+        val outOfCycleRide = dtcEventEarlierDay.copy(
+            id = 4,
+            rideDateMillis = Calendar.getInstance().apply { set(2026, Calendar.OCTOBER, 20, 12, 0, 0) }.timeInMillis,
+            rideDateIso = "2026-10-20"
+        )
+
+        val days = com.example.domain.FinanceSummaryCalculator.buildDailyCycleBreakdown(
+            rides = listOf(boltEvening, uberLateNightSameShift, dtcEventEarlierDay, outOfCycleRide),
+            settings = settings,
+            cycle = cycle
+        )
+
+        // Only 2 days inside 21 Oct .. 20 Nov, newest first
+        assertEquals(2, days.size)
+        assertEquals("2026-11-17", days[0].dateIso)
+        assertEquals("2026-11-15", days[1].dateIso)
+
+        val nov17 = days[0]
+        assertEquals(2, nov17.summary.rideCount)
+        assertEquals(230.0, nov17.summary.grossIncome, 0.001)
+        assertEquals(15.0, nov17.summary.totalTips, 0.001)
+        assertEquals(216.6, nov17.summary.netIncome, 0.001)
+        assertEquals(2, nov17.platformBreakdowns.size)
+        // Sorted by net income descending -> Uber (141.0) then Bolt (75.6)
+        assertEquals("Uber", nov17.platformBreakdowns[0].platformName)
+        assertEquals(140.0, nov17.platformBreakdowns[0].grossFare, 0.001)
+        assertEquals(10.0, nov17.platformBreakdowns[0].tips, 0.001)
+        assertEquals("Bolt", nov17.platformBreakdowns[1].platformName)
+        assertEquals(90.0, nov17.platformBreakdowns[1].grossFare, 0.001)
+        assertEquals(5.0, nov17.platformBreakdowns[1].tips, 0.001)
+
+        val nov15 = days[1]
+        assertEquals(1, nov15.summary.rideCount)
+        assertEquals(300.0, nov15.summary.netIncome, 0.001)
+        assertEquals("DTC Event Booking", nov15.platformBreakdowns[0].platformName)
+    }
+
+    @Test
+    fun `default platforms are Bolt DTC Uber DTC Event Booking and normalization collapses spaces`() {
+        assertTrue(RideCalculator.isDefaultPlatform("Bolt"))
+        assertTrue(RideCalculator.isDefaultPlatform("BOLT"))
+        assertTrue(RideCalculator.isDefaultPlatform("dtc"))
+        assertTrue(RideCalculator.isDefaultPlatform("UBER"))
+        assertTrue(RideCalculator.isDefaultPlatform("  dtc   event   booking "))
+        assertFalse(RideCalculator.isDefaultPlatform("Careem"))
+        assertFalse(RideCalculator.isDefaultPlatform("Yango"))
+        assertEquals("DTC Event Booking", RideCalculator.normalizePlatformInput("  DTC   Event   Booking "))
+    }
+
+    @Test
+    fun `daily reminder scheduler computes 4 PM and 4 AM trigger times and active windows`() {
+        // 10:30 AM -> same day 16:00, next day 04:00
+        val morningNow = Calendar.getInstance().apply {
+            set(2026, Calendar.NOVEMBER, 18, 10, 30, 15)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val next4Pm = com.example.util.RideReminderScheduler.nextDailyTriggerMillis(morningNow, hourOfDay = 16, minute = 0)
+        val cal4Pm = Calendar.getInstance().apply { timeInMillis = next4Pm }
+        assertEquals(18, cal4Pm.get(Calendar.DAY_OF_MONTH))
+        assertEquals(16, cal4Pm.get(Calendar.HOUR_OF_DAY))
+        assertEquals(0, cal4Pm.get(Calendar.MINUTE))
+
+        val next4Am = com.example.util.RideReminderScheduler.nextDailyTriggerMillis(morningNow, hourOfDay = 4, minute = 0)
+        val cal4Am = Calendar.getInstance().apply { timeInMillis = next4Am }
+        assertEquals(19, cal4Am.get(Calendar.DAY_OF_MONTH))
+        assertEquals(4, cal4Am.get(Calendar.HOUR_OF_DAY))
+        assertEquals(0, cal4Am.get(Calendar.MINUTE))
+
+        // At 4:15 PM -> evening in-app reminder active
+        val at415Pm = Calendar.getInstance().apply {
+            set(2026, Calendar.NOVEMBER, 18, 16, 15, 0)
+        }.timeInMillis
+        val eveningPrompt = com.example.util.RideReminderScheduler.activeInAppReminder(at415Pm)
+        assertEquals("2026-11-18_16", eveningPrompt?.slotKey)
+
+        // At 4:15 AM -> night-shift wrap-up in-app reminder active
+        val at415Am = Calendar.getInstance().apply {
+            set(2026, Calendar.NOVEMBER, 18, 4, 15, 0)
+        }.timeInMillis
+        val morningPrompt = com.example.util.RideReminderScheduler.activeInAppReminder(at415Am)
+        assertEquals("2026-11-18_04", morningPrompt?.slotKey)
+
+        // At 10:30 AM -> outside reminder windows
+        assertEquals(null, com.example.util.RideReminderScheduler.activeInAppReminder(morningNow))
+
+        // Finance reminder at 4:15 PM & 4:15 AM only when pendingRideCount > 0
+        val emptyFinance = com.example.domain.FinanceUiState()
+        assertEquals(
+            null,
+            com.example.util.RideReminderScheduler.activeFinanceInAppReminder(at415Pm, emptyFinance, "AED")
+        )
+
+        val pendingFinance = com.example.domain.FinanceUiState(
+            cashOnHandGross = 120.0,
+            cashOnHandNet = 108.0,
+            cashRideCount = 1,
+            otherPaymentDueGross = 80.0,
+            otherPaymentDueNet = 72.0,
+            otherPaymentRideCount = 1,
+            pendingShifts = listOf(
+                com.example.domain.FinanceShiftSummary(
+                    shiftDateIso = "2026-11-18",
+                    rideIds = listOf(1L, 2L),
+                    rideCount = 2,
+                    cashOnHandGross = 120.0,
+                    cashOnHandNet = 108.0,
+                    otherDueGross = 80.0,
+                    otherDueNet = 72.0,
+                    totalGross = 200.0,
+                    totalNet = 180.0
+                )
+            )
+        )
+        val finEvening = com.example.util.RideReminderScheduler.activeFinanceInAppReminder(at415Pm, pendingFinance, "AED")
+        assertEquals("2026-11-18_16_fin", finEvening?.slotKey)
+        assertTrue(finEvening?.message?.contains("200.00") == true)
+
+        val finMorning = com.example.util.RideReminderScheduler.activeFinanceInAppReminder(at415Am, pendingFinance, "AED")
+        assertEquals("2026-11-18_04_fin", finMorning?.slotKey)
     }
 }

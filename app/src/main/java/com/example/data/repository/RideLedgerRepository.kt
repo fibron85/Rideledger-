@@ -11,10 +11,14 @@ import com.example.data.local.entity.PickupPointEntity
 import com.example.data.local.entity.PlatformEntity
 import com.example.data.local.entity.RideEntity
 import com.example.domain.BillingCycle
+import com.example.domain.FinanceSummaryCalculator
+import com.example.domain.FinanceUiState
 import com.example.domain.RideCalculator
 import com.example.domain.SecurityUtils
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.Locale
 
 data class ImportResult(
     val importedCount: Int,
@@ -34,6 +38,12 @@ class RideLedgerRepository(
     val storageSetupCompleted: Flow<Boolean> = sessionManager.storageSetupCompleted
 
     val grantedFolderUri: Flow<String?> = sessionManager.grantedFolderUri
+
+    val remindersEnabled: Flow<Boolean> = sessionManager.remindersEnabled
+
+    val dismissedReminderSlot: Flow<String?> = sessionManager.dismissedReminderSlot
+
+    val dismissedFinanceReminderSlot: Flow<String?> = sessionManager.dismissedFinanceReminderSlot
 
     val platforms: Flow<List<PlatformEntity>> = settingsDao.observePlatforms()
 
@@ -129,6 +139,26 @@ class RideLedgerRepository(
         sessionManager.setGrantedFolderUri(uriString)
     }
 
+    suspend fun setRemindersEnabled(enabled: Boolean) {
+        sessionManager.setRemindersEnabled(enabled)
+    }
+
+    suspend fun setDismissedReminderSlot(slotKey: String?) {
+        sessionManager.setDismissedReminderSlot(slotKey)
+    }
+
+    suspend fun setDismissedFinanceReminderSlot(slotKey: String?) {
+        sessionManager.setDismissedFinanceReminderSlot(slotKey)
+    }
+
+    suspend fun getPendingFinanceSummaryForActiveDriver(): Pair<String, FinanceUiState>? {
+        val driverId = sessionManager.activeDriverId.first() ?: return null
+        val settings = settingsDao.getAppSettings() ?: AppSettingsEntity()
+        val rides = rideDao.getAllRidesForDriverOnce(driverId)
+        val finance = FinanceSummaryCalculator.computeFinanceState(rides, settings)
+        return settings.currencyCode to finance
+    }
+
     suspend fun resetPassword(
         driverId: String,
         mobileNumber: String,
@@ -204,9 +234,21 @@ class RideLedgerRepository(
     }
 
     suspend fun addPlatform(name: String): Result<Unit> {
-        val clean = name.trim()
+        val clean = RideCalculator.normalizePlatformInput(name)
         if (clean.isEmpty()) {
             return Result.failure(IllegalArgumentException("Platform name cannot be empty."))
+        }
+        val normalizedNew = clean.lowercase(Locale.US)
+        val duplicate = settingsDao.getAllPlatformsOnce().firstOrNull {
+            RideCalculator.normalizePlatformInput(it.name).lowercase(Locale.US) == normalizedNew
+        }
+        if (duplicate != null) {
+            val message = if (RideCalculator.isDefaultPlatform(duplicate.name)) {
+                "\"${duplicate.name}\" is a default platform and already exists."
+            } else {
+                "Platform \"${duplicate.name}\" already exists."
+            }
+            return Result.failure(IllegalStateException(message))
         }
         val insertedId = settingsDao.insertPlatform(PlatformEntity(name = clean))
         if (insertedId == -1L) {
@@ -215,8 +257,14 @@ class RideLedgerRepository(
         return Result.success(Unit)
     }
 
-    suspend fun deletePlatform(platform: PlatformEntity) {
+    suspend fun deletePlatform(platform: PlatformEntity): Result<Unit> {
+        if (RideCalculator.isDefaultPlatform(platform.name)) {
+            return Result.failure(
+                IllegalStateException("\"${platform.name}\" is a default platform and cannot be deleted.")
+            )
+        }
         settingsDao.deletePlatform(platform)
+        return Result.success(Unit)
     }
 
     suspend fun addPickupPoint(
